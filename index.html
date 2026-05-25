@@ -1117,10 +1117,11 @@ function drawProjectDetail(e){
   const projHeader=`<div class="bg-white rounded-2xl p-4 shadow-sm">
     <div class="flex items-center gap-3 mb-3">
       <span class="text-3xl">${job.icon}</span>
-      <div>
+      <div class="flex-1">
         <div class="font-bold text-gray-800 text-lg">${jobName}</div>
         <div class="text-sm text-gray-400">${e.tanggal||''}</div>
       </div>
+      ${isCreator?`<button onclick="doDelete('${e.id}')" class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full border-2 border-red-200 text-red-400 hover:bg-red-50 text-base" title="${lang==='ja'?'削除':'Hapus'}">🗑</button>`:''}
     </div>
     ${e.perusahaan?`<div class="flex gap-2 mb-1"><span>🏢</span><div><div class="text-xs text-gray-400">${lang==='ja'?'会社名':'Perusahaan'}</div><div class="font-semibold text-gray-800">${esc(e.perusahaan)}</div></div></div>`:''}
     ${e.pic?`<div class="flex gap-2 mt-1"><span>👤</span><div><div class="text-xs text-gray-400">${lang==='ja'?'担当者':'PIC'}</div><div class="font-semibold text-gray-800">${esc(e.pic)}</div></div></div>`:''}
@@ -1188,7 +1189,6 @@ function drawProjectDetail(e){
     ${canEdit?`<button onclick="openForm(null,null,'${e.id}')" class="w-full border-2 border-blue-300 text-blue-600 font-bold py-3 rounded-2xl text-sm">${tx('myContribEdit')}</button>`:''}
     ${canDone?`<button onclick="markDone('${e.id}')" class="w-full bg-green-600 text-white font-bold py-3.5 rounded-2xl text-base">${tx('markDoneBtn')}</button>`:''}
     ${isAdmin?`<button onclick="adminCheck('${e.id}')" class="w-full ${e.adminChecked?'bg-purple-100 text-purple-700 border-2 border-purple-300':'bg-white border-2 border-purple-300 text-purple-700'} font-bold py-3 rounded-2xl text-sm">${e.adminChecked?tx('adminUncheckBtn'):tx('adminCheckBtn')}</button>`:''}
-    ${isCreator?`<button onclick="doDelete('${e.id}')" class="w-full border-2 border-red-200 text-red-500 font-bold py-3 rounded-2xl text-sm">🗑 ${tx('hapusBtn')}</button>`:''}
   </div>`;
 
   const commentsSection = buildCommentsSection(e);
