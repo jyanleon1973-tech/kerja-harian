@@ -1071,10 +1071,18 @@ window.openDetail=id=>{
   const e=allEntries.find(x=>x.id===id);if(!e)return;
   markCommentsSeen(id,(e.comments||[]).length);
   el('detailPlaceholder')?.classList.add('hidden');
-  drawDetail(e); show('detailScreen');
+  try{ drawDetail(e); }catch(err){
+    console.error('drawDetail error:',err);
+    el('detailContent').innerHTML=`<div class="bg-red-50 border border-red-200 rounded-2xl p-4 text-red-600 text-sm">⚠️ 表示エラー: ${err.message}</div>`;
+  }
+  show('detailScreen');
 };
 
 function drawDetail(e){
+  const job=JOB_TYPES.find(j=>j.id===e.jenis)||JOB_TYPES[5];
+  const titleEl=el('detailTitle');
+  if(titleEl) titleEl.textContent=(lang==='ja'?job.ja:job.label)+(e.tanggal?' ('+e.tanggal+')':'');
+  el('detailContent').innerHTML='';
   if(e.isProject) drawProjectDetail(e);
   else drawLegacyDetail(e);
 }
