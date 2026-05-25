@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1E3A8A">
+  <title>Buku Kerja / 作業日報</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    body { font-family: -apple-system,'Hiragino Sans','Yu Gothic UI',sans-serif; background:#F1F5F9; overscroll-behavior-y:none; }
+    .screen { display:none !important; }
+    .screen.show { display:flex !important; flex-direction:column; min-height:100dvh; }
+    .field-input { width:100%; background:white; border:1.5px solid #E2E8F0; border-radius:12px; padding:12px 14px; font-size:16px; outline:none; transition:border-color .15s; -webkit-appearance:none; }
+    .field-input:focus { border-color:#3B82F6; }
+    .field-label { font-size:11px; font-weight:700; color:#64748B; text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
+    .job-btn { transition:all .15s; border:2px solid transparent; }
+    .job-btn.selected { border-color:#1D4ED8; background:#EFF6FF; }
+    .photo-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+    .photo-thumb { aspect-ratio:1; border-radius:10px; overflow:hidden; position:relative; }
+    .photo-thumb img { width:100%; height:100%; object-fit:cover; }
+    .photo-del { position:absolute; top:4px; right:4px; background:rgba(0,0,0,.6); border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; color:white; font-size:11px; cursor:pointer; }
+    .entry-card { transition:transform .1s; }
+    .entry-card:active { transform:scale(.98); }
+    .jp-box { background:linear-gradient(135deg,#FEF3C7,#FFF7ED); border-left:4px solid #F59E0B; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .spin { animation:spin .8s linear infinite; }
+    .pb-nav { padding-bottom:80px; }
+    .task-row { display:flex; align-items:center; gap:6px; }
+    .task-row input[type=text] { flex:1; min-width:0; border:1.5px solid #E2E8F0; border-radius:10px; padding:9px 11px; font-size:15px; outline:none; background:white; }
+    .task-row input[type=text]:focus { border-color:#3B82F6; }
+    .task-row input[type=number] { width:56px; border:1.5px solid #E2E8F0; border-radius:10px; padding:9px 4px; font-size:14px; text-align:center; outline:none; background:white; }
+    .task-row input[type=number]:focus { border-color:#3B82F6; }
+    .task-row .min-label { font-size:11px; color:#94A3B8; font-weight:600; flex-shrink:0; }
+    .mat-row { display:flex; align-items:center; gap:6px; }
+    .mat-row input { border:1.5px solid #E2E8F0; border-radius:10px; padding:8px 10px; font-size:14px; outline:none; background:white; }
+    .mat-row input:focus { border-color:#3B82F6; }
+    /* project selector button */
+    .proj-sel-btn { border:2px solid #E2E8F0; border-radius:12px; padding:10px 14px; background:white; text-align:left; cursor:pointer; transition:all .15s; }
+    .proj-sel-btn.active { border-color:#3B82F6; background:#EFF6FF; }
+    /* worker avatar */
+    .w-avatar { width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; }
+    /* checked card */
+    .card-checked { background:#F5F3FF; border:1.5px solid #C4B5FD; }
+    .card-done    { background:#F0FDF4; border:1.5px solid #86EFAC; }
+    .comment-bubble { background:#F8FAFC; border-radius:14px; padding:10px 14px; border:1px solid #E2E8F0; }
+    .comment-bubble.mine { background:#EFF6FF; border-color:#BFDBFE; }
+    @keyframes commentBlink {
+      0%,49%{ opacity:1; }
+      50%,100%{ opacity:0.2; }
+    }
+    @keyframes namePulse {
+      0%,49%{ background-color:transparent; color:inherit; }
+      50%,100%{ background-color:#FEF08A; color:#92400E; }
+    }
+    .comment-new-badge { animation:commentBlink 0.8s step-end infinite; display:inline-block; }
+    .comment-new-name  { animation:namePulse 0.8s step-end infinite; border-radius:6px; padding:0 4px; }
+
+    /* ── DESKTOP LAYOUT ── */
+    @media (min-width: 768px) {
+      body { max-width:100% !important; display:flex !important; height:100dvh; overflow:hidden; background:#E8EDF5; }
+      .screen { min-height:unset !important; }
+
+      /* Side panels: need .show class, laid out as flex row in body */
+      #homeScreen.show {
+        flex-direction:column !important;
+        width:400px; min-width:320px; flex-shrink:0;
+        height:100dvh;
+        border-right:1px solid #CBD5E1;
+        box-shadow:2px 0 12px rgba(0,0,0,0.06);
+        overflow:hidden;
+      }
+      #detailScreen.show {
+        flex-direction:column !important;
+        flex:1; height:100dvh;
+        background:#F1F5F9;
+        overflow:hidden;
+      }
+      /* Form = slide-in overlay */
+      #formScreen.desktop-open {
+        position:fixed !important; top:0; right:0;
+        width:min(580px,46vw); height:100dvh;
+        z-index:200;
+        display:flex !important;
+        flex-direction:column !important;
+        box-shadow:-8px 0 40px rgba(0,0,0,0.18);
+        background:white;
+      }
+      /* Setup / Profile screens: fullscreen overlay */
+      #setupScreen.show, #profileScreen.show {
+        position:fixed !important; inset:0; z-index:300;
+        min-height:100dvh !important;
+      }
+      .desk-no-pt10 { padding-top:12px !important; }
+      #bottomNav { display:none !important; }
+      .pb-nav { padding-bottom:16px !important; }
+      #desktopAddBtn { display:flex !important; }
+      #detailBackBtn, #formBackBtn { display:none !important; }
+    }
+  </style>
+</head>
+<body class="max-w-lg mx-auto md:max-w-none md:mx-0">
+
+<!-- SETUP -->
+<div id="setupScreen" class="screen show bg-white">
+  <div class="flex-1 flex flex-col items-center justify-center p-6">
+    <div class="text-6xl mb-3">🔥</div>
+    <h1 class="text-2xl font-bold text-gray-800 mb-1 text-center">Pengaturan Firebase<br><span class="text-lg font-medium text-gray-500">Firebase 設定</span></h1>
+    <p class="text-gray-400 text-sm text-center mb-6">Masukkan konfigurasi Firebase<br>Firebase設定を入力してください</p>
+    <div class="w-full max-w-sm space-y-2.5">
+      <div><div class="field-label">apiKey</div><input id="s_apiKey" type="text" placeholder="AIzaSy..." class="field-input"></div>
+      <div><div class="field-label">authDomain</div><input id="s_authDomain" type="text" placeholder="project.firebaseapp.com" class="field-input"></div>
+      <div><div class="field-label">projectId</div><input id="s_projectId" type="text" placeholder="your-project-id" class="field-input"></div>
+      <div><div class="field-label">storageBucket</div><input id="s_storageBucket" type="text" placeholder="project.appspot.com" class="field-input"></div>
+      <div><div class="field-label">messagingSenderId</div><input id="s_messagingSenderId" type="text" placeholder="123456789" class="field-input"></div>
+      <div><div class="field-label">appId</div><input id="s_appId" type="text" placeholder="1:123..." class="field-input"></div>
+    </div>
+    <button onclick="saveSetup()" class="mt-5 w-full max-w-sm bg-blue-600 text-white font-bold py-4 rounded-2xl text-lg">Mulai / 始める →</button>
+  </div>
+</div>
+
+<!-- PROFILE -->
+<div id="profileScreen" class="screen bg-white">
+  <div class="flex-1 flex flex-col items-center justify-center p-6">
+    <div class="text-6xl mb-3">👷</div>
+    <h2 class="text-2xl font-bold text-gray-800 mb-1">Profil Pekerja / 作業者</h2>
+    <p class="text-gray-400 text-sm mb-6">Masukkan informasi Anda / 情報を入力してください</p>
+    <div class="w-full max-w-sm space-y-3">
+      <div><div class="field-label">Nama Lengkap / 氏名</div><input id="p_name" type="text" placeholder="Contoh: Ahmad / 例：鈴木" class="field-input text-center text-lg"></div>
+      <div><div class="field-label">Jabatan / 職種</div><input id="p_role" type="text" placeholder="Contoh: Teknisi / 例：溶接工" class="field-input text-center"></div>
+    </div>
+    <button onclick="saveProfile()" class="mt-6 w-full max-w-sm bg-blue-600 text-white font-bold py-4 rounded-2xl text-lg">Simpan &amp; Mulai / 保存して始める →</button>
+  </div>
+</div>
+
+<!-- HOME -->
+<div id="homeScreen" class="screen bg-gray-50">
+  <div class="bg-blue-700 px-4 pt-10 pb-3 desk-no-pt10">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <p class="text-blue-200 text-xs font-medium">Buku Harian Kerja / 作業日報</p>
+        <h1 id="homeTitle" class="text-white text-xl font-bold">作業日報 📋</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="desktopAddBtn" onclick="openForm()" class="hidden items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full bg-white text-blue-700">＋ 新規</button>
+        <button onclick="toggleLang()" id="langBtn" class="text-xs font-bold px-3 py-1.5 rounded-full bg-blue-500 text-white border border-blue-400">🇯🇵 JP</button>
+        <div id="homeAvatar" onclick="openProfileModal()" class="w-10 h-10 rounded-full bg-blue-500 border-2 border-blue-300 flex items-center justify-center text-white font-bold text-lg cursor-pointer" title="プロフィール設定"></div>
+      </div>
+    </div>
+    <div class="grid grid-cols-3 gap-2 mb-3">
+      <div class="bg-blue-600 rounded-xl p-2.5 text-center"><div id="statTotal" class="text-white font-bold text-xl">0</div><div id="statTotalLabel" class="text-blue-200 text-xs">Total</div></div>
+      <div class="bg-blue-600 rounded-xl p-2.5 text-center"><div id="statMonth" class="text-white font-bold text-xl">0</div><div id="statMonthLabel" class="text-blue-200 text-xs">Bulan Ini</div></div>
+      <div class="bg-blue-600 rounded-xl p-2.5 text-center"><div id="statToday" class="text-white font-bold text-xl">0</div><div id="statTodayLabel" class="text-blue-200 text-xs">Hari Ini</div></div>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="switchTab('mine')" id="tabMineBtn" class="flex-1 py-2 rounded-xl text-sm font-bold bg-white text-blue-700"><span id="tabMineLabel">👤 Saya</span></button>
+      <button onclick="switchTab('team')" id="tabTeamBtn" class="flex-1 py-2 rounded-xl text-sm font-bold bg-blue-600 text-blue-200 border border-blue-500"><span id="tabTeamLabel">👥 Tim</span></button>
+    </div>
+  </div>
+  <div class="bg-white border-b border-gray-100 px-4 py-2 flex gap-2 overflow-x-auto">
+    <button onclick="setFilter('all')" data-filter="all" class="filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full bg-blue-600 text-white">Semua / 全て</button>
+    <button onclick="setFilter('Las')" data-filter="Las" class="filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600">🔥 Las</button>
+    <button onclick="setFilter('Ganti Ban')" data-filter="Ganti Ban" class="filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600">🔧 Ban</button>
+    <button onclick="setFilter('Pengecatan')" data-filter="Pengecatan" class="filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600">🎨 Cat</button>
+    <button onclick="setFilter('Perbaikan')" data-filter="Perbaikan" class="filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600">⚙️ Servis</button>
+    <button onclick="setFilter('Lainnya')" data-filter="Lainnya" class="filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full bg-gray-100 text-gray-600">📌 Lainnya</button>
+  </div>
+  <div class="flex-1 overflow-y-auto pb-nav">
+    <div id="entryList" class="p-4 space-y-3"></div>
+    <div id="emptyState" class="hidden flex-col items-center justify-center py-20 text-center px-8">
+      <div class="text-5xl mb-3">📝</div>
+      <p id="emptyTitle" class="font-bold text-gray-500 text-lg">Belum ada laporan</p>
+      <p id="emptyMsg" class="text-gray-400 text-sm mt-1">Tekan ＋ untuk membuat laporan baru</p>
+    </div>
+  </div>
+</div>
+
+<!-- FORM -->
+<div id="formScreen" class="screen bg-gray-50">
+  <div class="bg-white border-b border-gray-100 sticky top-0 z-20 pt-10 desk-no-pt10">
+    <div class="flex items-center gap-2 px-4 py-3">
+      <button id="formBackBtn" onclick="goHome()" class="p-2 -ml-2 text-gray-600">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <!-- Desktop close button (×) -->
+      <button onclick="goHome()" class="hidden md:flex p-2 -ml-2 text-gray-500 hover:text-gray-800 items-center justify-center">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+      <h2 id="formTitle" class="font-bold text-gray-800 text-lg flex-1">Laporan Baru</h2>
+      <button onclick="saveEntry()" id="saveBtn" class="bg-blue-600 text-white font-bold px-5 py-2 rounded-xl text-sm">Simpan</button>
+    </div>
+  </div>
+  <div class="flex-1 overflow-y-auto pb-6">
+    <div class="p-4 space-y-4">
+
+      <!-- PROJECT SELECTOR (shown when active projects exist today and not editing) -->
+      <div id="projectSelectorSection" class="hidden bg-indigo-50 rounded-2xl p-4 shadow-sm border border-indigo-200">
+        <div class="field-label mb-3" id="lbl_projSelect">今日のプロジェクトに追加 / Tambah ke Proyek</div>
+        <div id="todayProjBtns" class="space-y-2 mb-3"></div>
+        <button onclick="selectNewProject()" id="newProjBtn"
+          class="w-full py-2.5 rounded-xl text-sm font-bold border-2 border-dashed border-indigo-300 text-indigo-600">
+          ＋ <span id="lbl_newProj">新しいプロジェクト / Proyek Baru</span>
+        </button>
+      </div>
+
+      <!-- CONTRIBUTING-TO BANNER (shown when contributing to an existing project) -->
+      <div id="projInfoBanner" class="hidden bg-indigo-50 rounded-2xl p-3 shadow-sm border border-indigo-200">
+        <div class="flex items-center gap-3">
+          <span id="projBannerIcon" class="text-2xl">📌</span>
+          <div class="flex-1 min-w-0">
+            <div id="projBannerName" class="font-bold text-gray-800 text-sm truncate"></div>
+            <div id="projBannerDate" class="text-xs text-indigo-500"></div>
+          </div>
+          <button onclick="selectNewProject()" class="text-xs text-red-400 font-bold flex-shrink-0">✕ <span id="lbl_cancelSel">解除</span></button>
+        </div>
+      </div>
+
+      <!-- PROJECT-LEVEL FIELDS (hidden when contributing) -->
+      <div id="projectLevelFields">
+        <!-- Date -->
+        <div class="bg-white rounded-2xl p-4 shadow-sm">
+          <div class="grid grid-cols-3 gap-2">
+            <div><div class="field-label" id="lbl_tanggal">Tanggal 📅</div><input id="f_tanggal" type="date" class="field-input"></div>
+            <div><div class="field-label" id="lbl_mulai2">Mulai ⏰</div><input id="f_mulai_proj" type="time" class="field-input"></div>
+            <div><div class="field-label" id="lbl_selesai2">Selesai ⏰</div><input id="f_selesai_proj" type="time" class="field-input"></div>
+          </div>
+        </div>
+        <!-- Client -->
+        <div class="bg-white rounded-2xl p-4 shadow-sm space-y-3 mt-4">
+          <div><div class="field-label" id="lbl_perusahaan">Perusahaan 🏢 / 会社名</div><input id="f_perusahaan" type="text" placeholder="Nama perusahaan" class="field-input"></div>
+          <div><div class="field-label" id="lbl_pic">Penanggung Jawab 👤 / 担当者</div><input id="f_pic" type="text" placeholder="Nama PIC" class="field-input"></div>
+        </div>
+        <!-- Job Type -->
+        <div class="bg-white rounded-2xl p-4 shadow-sm mt-4">
+          <div class="field-label mb-3" id="lbl_jenis">Jenis Pekerjaan 🔨 / 作業種類</div>
+          <div id="jobGrid" class="grid grid-cols-3 gap-2"></div>
+          <div id="otherWrap" class="mt-3 hidden"><input id="f_lainnya" type="text" placeholder="Tulis jenis pekerjaan..." class="field-input"></div>
+        </div>
+        <!-- Distance -->
+        <div class="bg-white rounded-2xl p-4 shadow-sm mt-4">
+          <div class="field-label" id="lbl_jarak">Jarak Perjalanan 🚗 / 出張距離</div>
+          <div class="relative"><input id="f_jarak" type="number" min="0" placeholder="0" class="field-input pr-12"><span class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-medium">km</span></div>
+        </div>
+      </div>
+
+      <!-- MY CONTRIBUTION FIELDS -->
+      <!-- Time (for contribution) -->
+      <div id="contribTimeBlock" class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="field-label mb-2" id="lbl_contribTime">自分の作業時間 / Waktu Kerja Saya</div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><div class="field-label" id="lbl_mulai">Mulai ⏰</div><input id="f_mulai" type="time" class="field-input" oninput="calcJam()"></div>
+          <div><div class="field-label" id="lbl_selesai">Selesai ⏰</div><input id="f_selesai" type="time" class="field-input" oninput="calcJam()"></div>
+        </div>
+        <div id="totalJam" class="hidden mt-2 text-center text-sm text-blue-600 font-semibold"></div>
+      </div>
+
+      <!-- Tasks -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="field-label mb-2" id="lbl_deskripsi">Isi Pekerjaan 📋 / 作業内容</div>
+        <div class="flex items-center gap-1.5 mb-2 px-0.5 text-xs text-gray-400">
+          <span class="flex-1" id="colTask">Detail / 作業詳細</span>
+          <span style="width:56px;text-align:center" id="colMenit">Menit / 分</span>
+          <span style="width:24px"></span>
+        </div>
+        <div id="taskRows" class="space-y-2 mb-2"></div>
+        <button onclick="addTaskRow()" class="flex items-center gap-1.5 text-blue-500 text-sm font-semibold hover:bg-blue-50 px-2.5 py-1.5 rounded-lg transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          <span id="addTaskBtn">Tambah pekerjaan / 作業を追加</span>
+        </button>
+      </div>
+
+      <!-- Material -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="field-label mb-2" id="lbl_material">Material 🔩 / 使用材料</div>
+        <div class="flex items-center gap-1.5 mb-1 px-0.5 text-xs text-gray-400">
+          <span class="flex-1" id="colNama">Nama / 品目</span>
+          <span style="width:56px;text-align:center" id="colJumlah">Jumlah / 個数</span>
+          <span style="width:48px;text-align:center" id="colSatuan">Satuan / 単位</span>
+          <span style="width:24px"></span>
+        </div>
+        <div id="materialRows" class="space-y-1.5"></div>
+        <button onclick="addMatRow()" class="mt-2 flex items-center gap-1.5 text-emerald-600 text-sm font-semibold hover:bg-emerald-50 px-2.5 py-1.5 rounded-lg transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          <span id="addMatBtn">Tambah Material / 材料を追加</span>
+        </button>
+      </div>
+
+      <!-- Photo -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <div class="field-label mb-0" id="lbl_foto">Foto 📸 / 写真</div>
+          <span id="photoCount" class="text-xs text-gray-400 font-medium">0 枚</span>
+        </div>
+        <div id="formPhotoGrid" class="photo-grid mb-3"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <button onclick="openCamera()" class="border-2 border-dashed border-blue-300 rounded-xl py-4 flex flex-col items-center gap-1.5 text-blue-500">
+            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <span id="cameraBtnLabel" class="text-xs font-semibold">📷 Kamera</span>
+          </button>
+          <button onclick="openGallery()" class="border-2 border-dashed border-purple-300 rounded-xl py-4 flex flex-col items-center gap-1.5 text-purple-500">
+            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <span id="galleryBtnLabel" class="text-xs font-semibold">🖼 Galeri</span>
+          </button>
+        </div>
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" class="hidden" onchange="onPhotos(event)">
+        <input type="file" id="galleryInput" accept="image/*" multiple class="hidden" onchange="onPhotos(event)">
+      </div>
+
+      <!-- Note -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm">
+        <div class="field-label" id="lbl_catatan">Catatan 📝 / 備考</div>
+        <textarea id="f_catatan" rows="3" placeholder="Kendala, catatan..." class="field-input resize-none"></textarea>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- DETAIL -->
+<div id="detailScreen" class="screen bg-gray-50">
+  <div class="bg-white border-b border-gray-100 sticky top-0 z-20 pt-10 desk-no-pt10">
+    <div class="flex items-center gap-2 px-4 py-3">
+      <button id="detailBackBtn" onclick="goHome()" class="p-2 -ml-2 text-gray-600">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <h2 id="detailTitle" class="font-bold text-gray-800 text-lg flex-1">Detail</h2>
+      <button onclick="doTranslate()" id="translateBtn" class="bg-amber-500 text-white font-bold px-4 py-2 rounded-xl text-sm">🇯🇵 日本語訳</button>
+    </div>
+  </div>
+  <div class="flex-1 overflow-y-auto pb-nav">
+    <div id="detailPlaceholder" class="hidden md:flex flex-col items-center justify-center h-full text-center p-12 opacity-50">
+      <div class="text-6xl mb-4">📋</div>
+      <p class="font-bold text-gray-500 text-lg">エントリーを選択</p>
+      <p class="text-gray-400 text-sm mt-1">左のリストから作業記録を選んでください</p>
+    </div>
+    <div id="detailContent" class="p-4 space-y-3"></div>
+  </div>
+</div>
+
+<!-- BOTTOM NAV -->
+<nav id="bottomNav" class="hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-40 max-w-lg mx-auto md:hidden">
+  <div class="flex items-center">
+    <button onclick="goHome()" class="flex-1 flex flex-col items-center py-3 gap-0.5 text-blue-600">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      <span id="navDaftarLabel" class="text-xs font-bold">Daftar</span>
+    </button>
+    <button onclick="openForm()" class="flex-shrink-0 w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center -mt-5 shadow-xl mx-4">
+      <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+    </button>
+    <button onclick="openProfileModal()" class="flex-1 flex flex-col items-center py-3 gap-0.5 text-gray-400">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+      <span id="navProfilLabel" class="text-xs font-bold">Profil</span>
+    </button>
+  </div>
+</nav>
+
+<!-- PROFILE MODAL -->
+<div id="profileModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
+  <div class="bg-white w-full max-w-lg rounded-t-3xl p-6 pb-10 space-y-4 overflow-y-auto max-h-[92dvh]">
+    <div class="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-2"></div>
+    <h3 class="font-bold text-gray-800 text-lg text-center">Profil / プロフィール</h3>
+    <div><div class="field-label">Nama / 氏名</div><input id="pm_name" type="text" class="field-input"></div>
+    <div><div class="field-label">Jabatan / 職種</div><input id="pm_role" type="text" class="field-input"></div>
+    <!-- Admin toggle -->
+    <label class="flex items-center justify-between bg-purple-50 rounded-2xl p-4 cursor-pointer">
+      <div>
+        <div class="font-bold text-purple-700 text-sm">🔑 管理者モード / Admin</div>
+        <div class="text-xs text-purple-400">管理者チェック機能が使えます</div>
+      </div>
+      <input type="checkbox" id="pm_admin" class="w-5 h-5 rounded accent-purple-600">
+    </label>
+    <button onclick="updateProfile()" class="w-full bg-blue-600 text-white font-bold py-3.5 rounded-2xl">Simpan / 保存</button>
+    <button onclick="resetConfig()" class="w-full border-2 border-red-200 text-red-500 font-bold py-3 rounded-2xl text-sm">Reset Firebase</button>
+    <button onclick="closeProfileModal()" class="w-full text-gray-400 font-medium py-2">Tutup / 閉じる</button>
+  </div>
+</div>
+
+<!-- PHOTO VIEWER -->
+<div id="photoViewer" class="hidden fixed inset-0 bg-black z-50 flex items-center justify-center" onclick="closePhotoViewer()">
+  <img id="photoViewerImg" class="max-w-full max-h-full object-contain">
+  <button class="absolute top-4 right-4 w-10 h-10 bg-black/50 rounded-full text-white text-xl font-bold flex items-center justify-center">✕</button>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="hidden fixed top-16 left-1/2 -translate-x-1/2 z-50">
+  <div id="toastMsg" class="bg-gray-800 text-white px-5 py-2.5 rounded-full text-sm font-semibold shadow-xl whitespace-nowrap"></div>
+</div>
+
+<!-- LOADING -->
+<div id="loading" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+  <div class="bg-white rounded-2xl p-6 flex flex-col items-center gap-3">
+    <div class="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full spin"></div>
+    <p id="loadingMsg" class="text-gray-700 font-medium text-sm">Memproses...</p>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import {
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
+  onSnapshot, query, serverTimestamp
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+// ── STRINGS ──
+const STRINGS = {
+  id:{
+    homeTitle:'Buku Harian Kerja 📋', langBtn:'🇯🇵 JP',
+    statTotal:'Total', statMonth:'Bulan Ini', statToday:'Hari Ini',
+    emptyTitle:'Belum ada laporan', emptyMsg:'Tekan ＋ untuk laporan baru',
+    formNew:'Proyek Baru', formEdit:'Edit', saveBtn:'Simpan',
+    lbl_tanggal:'Tanggal 📅', lbl_mulai:'Mulai ⏰', lbl_selesai:'Selesai ⏰',
+    lbl_mulai2:'Mulai ⏰', lbl_selesai2:'Selesai ⏰',
+    lbl_perusahaan:'Perusahaan 🏢', lbl_pic:'PIC 👤',
+    lbl_jenis:'Jenis Pekerjaan 🔨',
+    lbl_deskripsi:'Isi Pekerjaan 📋', colTask:'Detail', colMenit:'Menit',
+    addTaskBtn:'Tambah pekerjaan', lbl_jarak:'Jarak 🚗',
+    lbl_material:'Material 🔩', colNama:'Nama', colJumlah:'Jumlah', colSatuan:'Satuan',
+    addMatBtn:'Tambah Material', lbl_foto:'Foto 📸',
+    cameraBtnLabel:'📷 Kamera', galleryBtnLabel:'🖼 Galeri',
+    lbl_catatan:'Catatan 📝',
+    lbl_contribTime:'Waktu Kerja Saya ⏰',
+    lbl_projSelect:'Tambah ke Proyek Hari Ini',
+    lbl_newProj:'Proyek Baru',
+    lbl_cancelSel:'Batal',
+    detailTitle:'Detail', navDaftar:'Daftar', navProfil:'Profil',
+    ph_perusahaan:'Nama perusahaan', ph_pic:'Nama PIC',
+    ph_lainnya:'Tulis jenis...', ph_task:'Nama pekerjaan...',
+    ph_catatan:'Kendala, catatan...', ph_nama:'Nama Barang', ph_jumlah:'Jumlah', ph_satuan:'Satuan',
+    menit:'menit', matLabel:'Material', durLabel:'Jam Kerja',
+    editBtn:'Edit', hapusBtn:'Hapus',
+    totalMenit:(m)=>`⏱ ${Math.floor(m/60)}j ${m%60}m`,
+    photoCountFn:(n)=>`${n} foto`,
+    tabMine:'👤 Saya', tabTeam:'👥 Tim',
+    statusActive:'🔄 Aktif', statusDone:'✅ Selesai', statusChecked:'✔ Dicek Admin',
+    markDoneBtn:'✅ Selesai Bekerja', adminCheckBtn:'✔ Cek Admin',
+    adminUncheckBtn:'✔ Batal Cek', addContribBtn:'+ Tambah Kerja Saya',
+    myContribEdit:'✏️ Edit Kerja Saya',
+    workers:'Pekerja',
+  },
+  ja:{
+    homeTitle:'作業日報 📋', langBtn:'🇮🇩 ID',
+    statTotal:'合計', statMonth:'今月', statToday:'今日',
+    emptyTitle:'まだ記録なし', emptyMsg:'＋ボタンで新規作成',
+    formNew:'新しいプロジェクト', formEdit:'編集', saveBtn:'保存',
+    lbl_tanggal:'日付 📅', lbl_mulai:'開始 ⏰', lbl_selesai:'終了 ⏰',
+    lbl_mulai2:'開始 ⏰', lbl_selesai2:'終了 ⏰',
+    lbl_perusahaan:'会社名 🏢', lbl_pic:'担当者 👤',
+    lbl_jenis:'作業種類 🔨',
+    lbl_deskripsi:'作業内容 📋', colTask:'作業詳細', colMenit:'分',
+    addTaskBtn:'作業を追加', lbl_jarak:'出張距離 🚗',
+    lbl_material:'使用材料 🔩', colNama:'品目', colJumlah:'個数', colSatuan:'単位',
+    addMatBtn:'材料を追加', lbl_foto:'写真 📸',
+    cameraBtnLabel:'📷 カメラ', galleryBtnLabel:'🖼 フォルダ',
+    lbl_catatan:'備考 📝',
+    lbl_contribTime:'自分の作業時間 ⏰',
+    lbl_projSelect:'今日のプロジェクトに追加',
+    lbl_newProj:'新しいプロジェクト',
+    lbl_cancelSel:'解除',
+    detailTitle:'詳細', navDaftar:'一覧', navProfil:'プロフィール',
+    ph_perusahaan:'クライアント会社名', ph_pic:'担当者名',
+    ph_lainnya:'作業種類を入力...', ph_task:'作業名...',
+    ph_catatan:'課題・連絡事項...', ph_nama:'品目名', ph_jumlah:'個数', ph_satuan:'単位',
+    menit:'分', matLabel:'使用材料', durLabel:'作業時間',
+    editBtn:'編集', hapusBtn:'削除',
+    totalMenit:(m)=>`⏱ ${Math.floor(m/60)}時間${m%60}分`,
+    photoCountFn:(n)=>`${n} 枚`,
+    tabMine:'👤 自分', tabTeam:'👥 全員',
+    statusActive:'🔄 作業中', statusDone:'✅ 完了', statusChecked:'✔ 管理者確認済',
+    markDoneBtn:'✅ 仕事完了', adminCheckBtn:'✔ 管理者チェック',
+    adminUncheckBtn:'✔ チェック解除', addContribBtn:'+ 自分の作業を追加',
+    myContribEdit:'✏️ 自分の作業を編集',
+    workers:'作業者',
+  }
+};
+
+let lang = localStorage.getItem('kerjaLang') || 'id';
+const tx = k => STRINGS[lang][k] ?? k;
+
+function applyLang() {
+  const s = STRINGS[lang];
+  const ids = {
+    homeTitle:s.homeTitle, langBtn:s.langBtn,
+    statTotalLabel:s.statTotal, statMonthLabel:s.statMonth, statTodayLabel:s.statToday,
+    emptyTitle:s.emptyTitle, emptyMsg:s.emptyMsg, saveBtn:s.saveBtn,
+    lbl_tanggal:s.lbl_tanggal, lbl_mulai:s.lbl_mulai, lbl_selesai:s.lbl_selesai,
+    lbl_mulai2:s.lbl_mulai2, lbl_selesai2:s.lbl_selesai2,
+    lbl_perusahaan:s.lbl_perusahaan, lbl_pic:s.lbl_pic, lbl_jenis:s.lbl_jenis,
+    lbl_deskripsi:s.lbl_deskripsi, colTask:s.colTask, colMenit:s.colMenit,
+    addTaskBtn:s.addTaskBtn, lbl_jarak:s.lbl_jarak,
+    lbl_material:s.lbl_material, colNama:s.colNama, colJumlah:s.colJumlah,
+    colSatuan:s.colSatuan, addMatBtn:s.addMatBtn, lbl_foto:s.lbl_foto,
+    cameraBtnLabel:s.cameraBtnLabel, galleryBtnLabel:s.galleryBtnLabel, lbl_catatan:s.lbl_catatan,
+    lbl_contribTime:s.lbl_contribTime, lbl_projSelect:s.lbl_projSelect,
+    lbl_newProj:s.lbl_newProj, lbl_cancelSel:s.lbl_cancelSel,
+    detailTitle:s.detailTitle, navDaftarLabel:s.navDaftar, navProfilLabel:s.navProfil,
+    tabMineLabel:s.tabMine, tabTeamLabel:s.tabTeam,
+  };
+  Object.entries(ids).forEach(([id,txt])=>{ const e=el(id); if(e) e.textContent=txt; });
+  el('f_perusahaan').placeholder = s.ph_perusahaan;
+  el('f_pic').placeholder        = s.ph_pic;
+  el('f_lainnya').placeholder    = s.ph_lainnya;
+  el('f_catatan').placeholder    = s.ph_catatan;
+  document.querySelectorAll('.task-text').forEach(i=>i.placeholder=s.ph_task);
+  document.querySelectorAll('.mat-name').forEach(i=>i.placeholder=s.ph_nama);
+  document.querySelectorAll('.mat-qty').forEach(i=>i.placeholder=s.ph_jumlah);
+  document.querySelectorAll('.mat-unit').forEach(i=>i.placeholder=s.ph_satuan);
+  renderList();
+}
+
+window.toggleLang = () => { lang=lang==='id'?'ja':'id'; localStorage.setItem('kerjaLang',lang); applyLang(); };
+
+const JOB_TYPES = [
+  {id:'Las',icon:'🔥',label:'Las',ja:'溶接'},
+  {id:'Ganti Ban',icon:'🔧',label:'Ganti Ban',ja:'タイヤ交換'},
+  {id:'Pengecatan',icon:'🎨',label:'Cat',ja:'塗装'},
+  {id:'Perbaikan',icon:'⚙️',label:'Servis',ja:'修理'},
+  {id:'Instalasi',icon:'🔩',label:'Pasang',ja:'取付工事'},
+  {id:'Lainnya',icon:'📌',label:'Lainnya',ja:'その他'},
+];
+
+// ── STATE ──
+let db, workerName, workerRole, isAdmin=false;
+let allEntries=[], currentFilter='all', viewMode='mine';
+let editingId=null, detailEntryId=null;
+let currentPhotos=[], selectedJob=null;
+let taskItems=[], matRows=[];
+
+// ── COMMENT SEEN MAP ──
+function getSeenMap(){ try{ return JSON.parse(localStorage.getItem('kerjaSeenComments')||'{}'); }catch{ return {}; } }
+function setSeenMap(m){ localStorage.setItem('kerjaSeenComments', JSON.stringify(m)); }
+function markCommentsSeen(id, count){ const m=getSeenMap(); m[id]=count; setSeenMap(m); }
+function hasNewComments(e){
+  if(!(e.comments||[]).length) return false;
+  const m=getSeenMap();
+  const seen=m[e.id]||0;
+  // Only "new" if there's a comment not by me that wasn't seen before
+  const unseenCount=(e.comments||[]).length - seen;
+  if(unseenCount<=0) return false;
+  // Check if any unseen comment is from someone else
+  return (e.comments||[]).slice(seen).some(c=>c.worker!==workerName);
+}
+let contributingTo=null; // projectId when adding/editing contribution
+
+// ── BOOT ──
+const cfg = localStorage.getItem('kerjaCfg');
+if(cfg){ try{ boot(JSON.parse(cfg)); }catch{ show('setupScreen'); } }
+else show('setupScreen');
+
+window.saveSetup = () => {
+  const c = {apiKey:v('s_apiKey'),authDomain:v('s_authDomain'),projectId:v('s_projectId'),
+    storageBucket:v('s_storageBucket'),messagingSenderId:v('s_messagingSenderId'),appId:v('s_appId')};
+  if(!c.apiKey||!c.projectId){toast('❌ Isi apiKey dan projectId!');return;}
+  localStorage.setItem('kerjaCfg',JSON.stringify(c)); boot(c);
+};
+
+function boot(c){
+  try{
+    const existing=getApps().find(a=>a.name==='kerja');
+    const app=existing||initializeApp(c,'kerja');
+    db=getFirestore(app);
+  }catch{ localStorage.removeItem('kerjaCfg'); show('setupScreen'); return; }
+  workerName=localStorage.getItem('kerjaName');
+  workerRole=localStorage.getItem('kerjaRole')||'';
+  isAdmin=localStorage.getItem('kerjaAdmin')==='true';
+  if(!workerName){show('profileScreen');return;}
+  startApp();
+}
+
+window.saveProfile = () => {
+  const n=v('p_name'); if(!n){toast('⚠️ Masukkan nama!');return;}
+  workerName=n; workerRole=v('p_role');
+  localStorage.setItem('kerjaName',n); localStorage.setItem('kerjaRole',workerRole);
+  startApp();
+};
+
+function startApp(){
+  el('homeAvatar').textContent=workerName.charAt(0).toUpperCase();
+  renderJobGrid(); listenEntries();
+  applyLang(); show('homeScreen');
+}
+
+// ── FIRESTORE ──
+function listenEntries(){
+  const q=query(collection(db,'kerja_entries'));
+  onSnapshot(q, snap=>{
+    allEntries=[];
+    snap.forEach(d=>allEntries.push({id:d.id,...d.data()}));
+    allEntries.sort((a,b)=>(b.createdAt?.toMillis?.()??0)-(a.createdAt?.toMillis?.()??0));
+    updateStats(); renderList();
+  });
+}
+
+function updateStats(){
+  const mine=allEntries.filter(e=>isMyEntry(e));
+  const today=new Date().toISOString().split('T')[0], ym=today.slice(0,7);
+  el('statTotal').textContent=mine.length;
+  el('statMonth').textContent=mine.filter(e=>e.tanggal?.startsWith(ym)).length;
+  el('statToday').textContent=mine.filter(e=>e.tanggal===today).length;
+}
+
+// Is this entry "mine"? (for stats and "自分" tab)
+function isMyEntry(e){
+  if(e.isProject) return (e.contributions||[]).some(c=>c.worker===workerName) || e.createdBy===workerName;
+  return e.worker===workerName;
+}
+
+// ── TABS ──
+window.switchTab = mode => {
+  viewMode=mode;
+  const a='flex-1 py-2 rounded-xl text-sm font-bold bg-white text-blue-700';
+  const i='flex-1 py-2 rounded-xl text-sm font-bold bg-blue-600 text-blue-200 border border-blue-500';
+  el('tabMineBtn').className=mode==='mine'?a:i;
+  el('tabTeamBtn').className=mode==='team'?a:i;
+  renderList();
+};
+
+// ── LIST ──
+function renderList(){
+  const list=el('entryList'), empty=el('emptyState');
+  let entries = viewMode==='mine' ? allEntries.filter(isMyEntry) : allEntries;
+  if(currentFilter!=='all') entries=entries.filter(e=>e.jenis===currentFilter);
+  if(!entries.length){list.innerHTML='';empty.style.display='flex';return;}
+  empty.style.display='none';
+  const bar={Las:'bg-red-500','Ganti Ban':'bg-blue-500',Pengecatan:'bg-purple-500',Perbaikan:'bg-orange-500',Instalasi:'bg-green-500',Lainnya:'bg-gray-400'};
+  list.innerHTML=entries.map(e=>{
+    if(e.isProject) return renderProjectCard(e, bar);
+    return renderLegacyCard(e, bar);
+  }).join('');
+}
+
+function renderProjectCard(e, bar){
+  const job=JOB_TYPES.find(j=>j.id===e.jenis)||JOB_TYPES[5];
+  const jobName=lang==='ja'?job.ja:job.label;
+  const contribs=e.contributions||[];
+
+  // Card background based on status
+  let cardCls='bg-white border border-transparent';
+  if(e.adminChecked) cardCls='card-checked';
+  else if(e.status==='done') cardCls='card-done';
+
+  // Status badge
+  let statusBadge='';
+  if(e.adminChecked) statusBadge=`<span class="text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">✔ ${lang==='ja'?'確認済':'Dicek'}</span>`;
+  else if(e.status==='done') statusBadge=`<span class="text-xs bg-green-100 text-green-700 font-bold px-2 py-0.5 rounded-full">✅ ${lang==='ja'?'完了':'Selesai'}</span>`;
+  else statusBadge=`<span class="text-xs bg-yellow-100 text-yellow-700 font-bold px-2 py-0.5 rounded-full">🔄 ${lang==='ja'?'作業中':'Aktif'}</span>`;
+
+  // Worker avatars
+  const colors=['bg-blue-400','bg-green-400','bg-red-400','bg-purple-400','bg-orange-400'];
+  const avatars=contribs.slice(0,4).map((c,i)=>`
+    <div class="w-avatar ${colors[i%colors.length]} text-white border-2 border-white -ml-1 first:ml-0" title="${esc(c.worker||'')}">
+      ${(c.worker||'?').charAt(0).toUpperCase()}
+    </div>`).join('');
+  const extraWorkers=contribs.length>4?`<span class="text-xs text-gray-400 ml-1">+${contribs.length-4}</span>`:'';
+
+  // Total minutes all workers
+  const totalMin=contribs.reduce((s,c)=>s+(c.tasks||[]).reduce((ss,t)=>ss+(parseInt(t.minutes)||0),0),0);
+  // Total photos
+  const totalPhotos=contribs.reduce((s,c)=>s+(c.photos||[]).length,0);
+
+  return `<div class="entry-card ${cardCls} rounded-2xl shadow-sm overflow-hidden cursor-pointer" onclick="openDetail('${e.id}')">
+    <div class="flex items-stretch">
+      <div class="w-2 ${bar[e.jenis]||'bg-gray-400'} flex-shrink-0"></div>
+      <div class="flex-1 p-4">
+        <div class="flex items-start justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">${job.icon}</span>
+            <div>
+              <div class="font-bold text-gray-800 text-sm">${jobName}</div>
+              <div class="text-xs text-gray-400">${e.tanggal||''}</div>
+            </div>
+          </div>
+          <div class="flex flex-col items-end gap-1">${statusBadge}</div>
+        </div>
+        ${e.perusahaan?`<div class="text-xs font-semibold text-gray-600 mb-2">🏢 ${esc(e.perusahaan)}</div>`:''}
+        <div class="flex items-center gap-0 mb-1.5">
+          ${avatars}${extraWorkers}
+          <span class="ml-2 text-xs text-gray-400 ${hasNewComments(e)?'comment-new-name':''}">${contribs.length} ${tx('workers')}</span>
+        </div>
+        <div class="flex flex-wrap gap-x-3 text-xs text-gray-400">
+          ${totalMin>0?`<span>⏱ ${totalMin}${tx('menit')}</span>`:''}
+          ${e.jarak&&e.jarak!='0'?`<span>🚗 ${e.jarak}km</span>`:''}
+          ${totalPhotos>0?`<span>📸 ${totalPhotos}</span>`:''}
+          ${(e.comments||[]).length>0?`<span class="${hasNewComments(e)?'text-red-500 font-bold comment-new-badge':'text-orange-500 font-bold'}">💬 ${(e.comments||[]).length}</span>`:''}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderLegacyCard(e, bar){
+  const job=JOB_TYPES.find(j=>j.id===e.jenis)||JOB_TYPES[5];
+  const jobName=lang==='ja'?job.ja:job.label;
+  const isOwn=e.worker===workerName;
+  const isDraft=e.isDraft===true;
+  const tasks=e.tasks||[];
+  const taskHtml=tasks.length
+    ?tasks.slice(0,2).map(t=>`<div class="text-xs text-gray-500 truncate">• ${esc(t.text||'')}${t.minutes?` (${t.minutes}${tx('menit')})`:''}</div>`).join('')+(tasks.length>2?`<div class="text-xs text-gray-400">+${tasks.length-2}...</div>`:'')
+    :(e.deskripsi?`<p class="text-sm text-gray-700 line-clamp-2">${esc(e.deskripsi)}</p>`:'');
+  const totalMin=tasks.reduce((s,t)=>s+(parseInt(t.minutes)||0),0);
+  let badges='';
+  if(isOwn&&isDraft) badges+=`<span class="text-xs bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded-full">✏️ Draft</span>`;
+  else if(isOwn&&!isDraft) badges+=`<span class="text-xs bg-green-100 text-green-700 font-bold px-2 py-0.5 rounded-full">✅</span>`;
+  if(viewMode==='team') badges+=`<span class="text-xs bg-blue-100 text-blue-700 font-bold px-2 py-0.5 rounded-full ${hasNewComments(e)?'comment-new-name':''}">👤 ${esc(e.worker||'')}</span>`;
+  return `<div class="entry-card bg-white rounded-2xl shadow-sm overflow-hidden cursor-pointer" onclick="openDetail('${e.id}')">
+    <div class="flex items-stretch">
+      <div class="w-1.5 ${bar[e.jenis]||'bg-gray-400'} flex-shrink-0"></div>
+      <div class="flex-1 p-4">
+        <div class="flex items-start justify-between mb-1.5">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">${job.icon}</span>
+            <div><div class="font-bold text-gray-800 text-sm">${jobName}</div><div class="text-xs text-gray-400">${e.tanggal||''}</div></div>
+          </div>
+          <div class="flex flex-col items-end gap-1">${badges}</div>
+        </div>
+        <div class="space-y-0.5 mb-1">${taskHtml}</div>
+        <div class="flex flex-wrap gap-x-3 mt-1.5 text-xs text-gray-400">
+          ${e.perusahaan?`<span>🏢 ${esc(e.perusahaan)}</span>`:''}
+          ${e.waktu_mulai&&e.waktu_selesai?`<span>⏰ ${e.waktu_mulai}–${e.waktu_selesai}</span>`:''}
+          ${totalMin>0?`<span>⏱ ${totalMin}${tx('menit')}</span>`:''}
+          ${(e.comments||[]).length>0?`<span class="${hasNewComments(e)?'text-red-500 font-bold comment-new-badge':'text-orange-500 font-bold'}">💬 ${(e.comments||[]).length}</span>`:''}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+window.setFilter = f => {
+  currentFilter=f;
+  document.querySelectorAll('.filter-btn').forEach(b=>{
+    const on=b.dataset.filter===f;
+    b.className=`filter-btn flex-shrink-0 text-xs font-bold px-3 py-1.5 rounded-full ${on?'bg-blue-600 text-white':'bg-gray-100 text-gray-600'}`;
+  });
+  renderList();
+};
+
+// ── FORM ──
+window.openForm = (id=null, prefillDate=null, projectId=null) => {
+  contributingTo=null; editingId=null;
+  currentPhotos=[]; selectedJob=null; taskItems=[]; matRows=[];
+  ['f_mulai','f_selesai','f_perusahaan','f_pic','f_jarak','f_catatan','f_lainnya',
+   'f_mulai_proj','f_selesai_proj'].forEach(i=>{if(el(i))el(i).value='';});
+  el('f_tanggal').value=prefillDate||new Date().toISOString().split('T')[0];
+  el('totalJam').classList.add('hidden');
+  el('otherWrap').classList.add('hidden');
+  document.querySelectorAll('.job-btn').forEach(b=>b.classList.remove('selected'));
+  el('formPhotoGrid').innerHTML=''; el('photoCount').textContent='0 枚';
+  taskItems=[{id:tuid(),text:'',minutes:''}];
+
+  // Determine mode
+  if(projectId) {
+    // Add / edit my contribution to existing project
+    contributingTo=projectId;
+    const proj=allEntries.find(e=>e.id===projectId);
+    if(proj){
+      const myC=proj.contributions?.find(c=>c.worker===workerName);
+      if(myC){
+        // Pre-fill with existing contribution
+        el('f_mulai').value=myC.waktu_mulai||'';
+        el('f_selesai').value=myC.waktu_selesai||'';
+        taskItems=myC.tasks?.length?myC.tasks.map(t=>({id:tuid(),text:t.text||'',minutes:t.minutes||''})):[{id:tuid(),text:'',minutes:''}];
+        matRows=myC.materials?.length?myC.materials.map(m=>({id:tuid(),name:m.name||'',qty:m.qty||'',unit:m.unit||''})):[];
+        currentPhotos=[...(myC.photos||[])];
+        el('f_catatan').value=myC.catatan||'';
+        calcJam();
+      }
+    }
+    showContribMode(projectId);
+  } else if(id){
+    const e=allEntries.find(x=>x.id===id);
+    if(e?.isProject){
+      // Edit my contribution in this project
+      contributingTo=id;
+      const myC=e.contributions?.find(c=>c.worker===workerName);
+      if(myC){
+        el('f_mulai').value=myC.waktu_mulai||'';
+        el('f_selesai').value=myC.waktu_selesai||'';
+        taskItems=myC.tasks?.length?myC.tasks.map(t=>({id:tuid(),text:t.text||'',minutes:t.minutes||''})):[{id:tuid(),text:'',minutes:''}];
+        matRows=myC.materials?.length?myC.materials.map(m=>({id:tuid(),name:m.name||'',qty:m.qty||'',unit:m.unit||''})):[];
+        currentPhotos=[...(myC.photos||[])];
+        el('f_catatan').value=myC.catatan||'';
+        calcJam();
+        // Also allow editing project-level data if creator
+        if(e.createdBy===workerName||isAdmin){
+          el('f_tanggal').value=e.tanggal||'';
+          el('f_perusahaan').value=e.perusahaan||'';
+          el('f_pic').value=e.pic||'';
+          el('f_jarak').value=e.jarak||'';
+          if(e.jenis) pickJob(e.jenis);
+          if(e.jenis_lainnya) el('f_lainnya').value=e.jenis_lainnya;
+          editingId=id; // also update project-level
+        }
+      }
+      showContribMode(id);
+    } else {
+      // Edit legacy entry
+      editingId=id;
+      if(e){
+        el('f_tanggal').value=e.tanggal||'';
+        el('f_mulai').value=e.waktu_mulai||'';
+        el('f_selesai').value=e.waktu_selesai||'';
+        el('f_perusahaan').value=e.perusahaan||'';
+        el('f_pic').value=e.pic||'';
+        el('f_jarak').value=e.jarak||'';
+        el('f_catatan').value=e.catatan||'';
+        if(e.jenis) pickJob(e.jenis);
+        if(e.jenis_lainnya) el('f_lainnya').value=e.jenis_lainnya;
+        taskItems=e.tasks?.length?e.tasks.map(t=>({id:tuid(),text:t.text||'',minutes:t.minutes||''})):[{id:tuid(),text:'',minutes:''}];
+        matRows=e.materials?.length?e.materials.map(m=>({id:tuid(),name:m.name||'',qty:m.qty||'',unit:m.unit||''})):[];
+        currentPhotos=[...(e.photos||[])];
+        calcJam();
+        const isDone=e.isDraft===false;
+        el('f_isDone') && (el('f_isDone').checked=isDone);
+      }
+      showNewProjectMode();
+    }
+  } else {
+    // New project — check for today's active projects
+    showNewProjectMode();
+    const today=new Date().toISOString().split('T')[0];
+    const todayActive=allEntries.filter(e=>e.isProject&&e.status==='active'&&e.tanggal===today&&(e.contributions||[]).every(c=>c.worker!==workerName));
+    if(todayActive.length>0){
+      renderTodayProjectBtns(todayActive);
+      el('projectSelectorSection').classList.remove('hidden');
+    } else {
+      el('projectSelectorSection').classList.add('hidden');
+    }
+  }
+
+  el('formTitle').textContent = contributingTo ? tx('saveBtn') : tx('formNew');
+  renderTaskRows(); renderMatRows();
+  show('formScreen');
+};
+
+function showContribMode(projId){
+  // Hide project-level fields, show contrib banner
+  el('projectLevelFields').classList.add('hidden');
+  el('projectSelectorSection').classList.add('hidden');
+  const proj=allEntries.find(e=>e.id===projId);
+  if(proj){
+    const job=JOB_TYPES.find(j=>j.id===proj.jenis)||JOB_TYPES[5];
+    el('projInfoBanner').classList.remove('hidden');
+    el('projBannerIcon').textContent=job.icon;
+    el('projBannerName').textContent=proj.perusahaan||(lang==='ja'?job.ja:job.label);
+    el('projBannerDate').textContent=proj.tanggal||'';
+  }
+}
+
+function showNewProjectMode(){
+  el('projectLevelFields').classList.remove('hidden');
+  el('projInfoBanner').classList.add('hidden');
+}
+
+function renderTodayProjectBtns(projects){
+  const c=el('todayProjBtns');
+  c.innerHTML=projects.map(p=>{
+    const job=JOB_TYPES.find(j=>j.id===p.jenis)||JOB_TYPES[5];
+    const contribCount=(p.contributions||[]).length;
+    return `<button class="proj-sel-btn w-full" onclick="selectProject('${p.id}')">
+      <div class="flex items-center gap-3">
+        <span class="text-xl">${job.icon}</span>
+        <div class="flex-1 text-left">
+          <div class="font-bold text-gray-800 text-sm">${esc(p.perusahaan||(lang==='ja'?job.ja:job.label))}</div>
+          <div class="text-xs text-gray-400">${p.tanggal||''} · ${contribCount}${tx('workers')}</div>
+        </div>
+        <span class="text-blue-500 text-lg">→</span>
+      </div>
+    </button>`;
+  }).join('');
+}
+
+window.selectProject = projId => {
+  contributingTo=projId;
+  showContribMode(projId);
+  renderTodayProjectBtns(allEntries.filter(e=>e.isProject&&e.status==='active'&&e.tanggal===new Date().toISOString().split('T')[0]&&(e.contributions||[]).every(c=>c.worker!==workerName)));
+  // scroll to top
+  el('formScreen').querySelector('.flex-1.overflow-y-auto').scrollTop=0;
+};
+
+window.selectNewProject = () => {
+  contributingTo=null;
+  showNewProjectMode();
+  const today=new Date().toISOString().split('T')[0];
+  const todayActive=allEntries.filter(e=>e.isProject&&e.status==='active'&&e.tanggal===today&&(e.contributions||[]).every(c=>c.worker!==workerName));
+  if(todayActive.length>0){ renderTodayProjectBtns(todayActive); el('projectSelectorSection').classList.remove('hidden'); }
+};
+
+function renderJobGrid(){
+  el('jobGrid').innerHTML=JOB_TYPES.map(j=>`
+    <button id="jb_${j.id.replace(' ','_')}" class="job-btn flex flex-col items-center gap-1 py-3 rounded-xl bg-gray-50" onclick="pickJob('${j.id}')">
+      <span class="text-2xl">${j.icon}</span>
+      <span class="text-xs font-bold text-gray-600">${j.label}</span>
+      <span class="text-xs text-gray-400">${j.ja}</span>
+    </button>`).join('');
+}
+
+window.pickJob=id=>{
+  selectedJob=id;
+  document.querySelectorAll('.job-btn').forEach(b=>b.classList.remove('selected'));
+  el(`jb_${id.replace(' ','_')}`)?.classList.add('selected');
+  el('otherWrap').classList.toggle('hidden',id!=='Lainnya');
+};
+
+window.calcJam=()=>{
+  const s=el('f_mulai').value,e=el('f_selesai').value;
+  if(!s||!e){el('totalJam').classList.add('hidden');return;}
+  const [sh,sm]=s.split(':').map(Number),[eh,em]=e.split(':').map(Number);
+  let m=(eh*60+em)-(sh*60+sm); if(m<0)m+=1440;
+  el('totalJam').textContent=STRINGS[lang].totalMenit(m);
+  el('totalJam').classList.remove('hidden');
+};
+
+// ── TASK / MAT ROWS ──
+function tuid(){return Math.random().toString(36).slice(2)+Date.now().toString(36);}
+window.addTaskRow=()=>{taskItems.push({id:tuid(),text:'',minutes:''});renderTaskRows();setTimeout(()=>{const i=document.querySelectorAll('.task-text');if(i.length)i[i.length-1].focus();},40);};
+window.removeTaskRow=id=>{if(taskItems.length<=1)return;taskItems=taskItems.filter(t=>t.id!==id);renderTaskRows();};
+window.updateTask=(id,field,val)=>{const t=taskItems.find(t=>t.id===id);if(t)t[field]=val;};
+function renderTaskRows(){
+  const c=el('taskRows');if(!c)return;
+  const s=STRINGS[lang]; c.innerHTML='';
+  taskItems.forEach(t=>{
+    const row=document.createElement('div'); row.className='task-row';
+    row.innerHTML=`
+      <input type="text" value="${esc(t.text)}" placeholder="${s.ph_task}" class="task-text flex-1"
+        oninput="updateTask('${t.id}','text',this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();addTaskRow();}">
+      <input type="number" value="${esc(String(t.minutes||''))}" placeholder="0" min="0" max="999"
+        style="width:56px;border:1.5px solid #E2E8F0;border-radius:10px;padding:9px 4px;font-size:14px;text-align:center;outline:none;background:white;"
+        oninput="updateTask('${t.id}','minutes',this.value)">
+      <span class="min-label">${s.menit}</span>
+      ${taskItems.length>1?`<button onclick="removeTaskRow('${t.id}')" style="width:24px;flex-shrink:0;color:#CBD5E1;" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#CBD5E1'"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>`:'<span style="width:24px"></span>'}`;
+    c.appendChild(row);
+  });
+}
+window.addMatRow=()=>{matRows.push({id:tuid(),name:'',qty:'',unit:''});renderMatRows();setTimeout(()=>{const i=document.querySelectorAll('.mat-name');if(i.length)i[i.length-1].focus();},40);};
+window.removeMatRow=id=>{matRows=matRows.filter(m=>m.id!==id);renderMatRows();};
+window.updateMat=(id,field,val)=>{const m=matRows.find(m=>m.id===id);if(m)m[field]=val;};
+function renderMatRows(){
+  const c=el('materialRows');if(!c)return;
+  const s=STRINGS[lang]; c.innerHTML='';
+  matRows.forEach(m=>{
+    const row=document.createElement('div'); row.className='mat-row';
+    row.innerHTML=`
+      <input type="text" value="${esc(m.name)}" placeholder="${s.ph_nama}" class="mat-name flex-1" style="flex:1;min-width:0" oninput="updateMat('${m.id}','name',this.value)">
+      <input type="text" value="${esc(m.qty)}" placeholder="${s.ph_jumlah}" class="mat-qty" style="width:56px;text-align:center" oninput="updateMat('${m.id}','qty',this.value)">
+      <input type="text" value="${esc(m.unit)}" placeholder="${s.ph_satuan}" class="mat-unit" style="width:48px;text-align:center" oninput="updateMat('${m.id}','unit',this.value)">
+      <button onclick="removeMatRow('${m.id}')" style="width:24px;flex-shrink:0;color:#CBD5E1;" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#CBD5E1'"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>`;
+    c.appendChild(row);
+  });
+}
+
+// ── SAVE ──
+window.saveEntry=async()=>{
+  const validTasks=taskItems.filter(t=>t.text.trim());
+  const contribution={
+    worker:workerName, workerRole,
+    waktu_mulai:el('f_mulai').value,
+    waktu_selesai:el('f_selesai').value,
+    tasks:validTasks.map(t=>({text:t.text,minutes:t.minutes||''})),
+    materials:matRows.filter(m=>m.name.trim()).map(m=>({name:m.name,qty:m.qty,unit:m.unit})),
+    photos:currentPhotos,
+    catatan:el('f_catatan').value.trim(),
+    addedAt:new Date().toISOString(),
+  };
+
+  if(contributingTo){
+    // Add or update my contribution in an existing project
+    const proj=allEntries.find(e=>e.id===contributingTo);
+    if(!proj){toast('❌ Project not found');return;}
+    const existing=(proj.contributions||[]).findIndex(c=>c.worker===workerName);
+    let newContribs=[...(proj.contributions||[])];
+    if(existing>=0) newContribs[existing]=contribution;
+    else newContribs.push(contribution);
+
+    const updateData={contributions:newContribs, updatedAt:serverTimestamp()};
+    // If also editing project-level (creator/admin)
+    if(editingId===contributingTo){
+      updateData.tanggal=el('f_tanggal').value;
+      updateData.perusahaan=el('f_perusahaan').value.trim();
+      updateData.pic=el('f_pic').value.trim();
+      updateData.jenis=selectedJob||proj.jenis||'Lainnya';
+      updateData.jenis_lainnya=el('f_lainnya').value.trim();
+      updateData.jarak=el('f_jarak').value||'0';
+    }
+    loading('保存中...');
+    try{
+      await updateDoc(doc(db,'kerja_entries',contributingTo),updateData);
+      toast(existing>=0?'✅ 作業を更新しました！':'✅ 作業を追加しました！');
+      goHome();
+    }catch(e){toast('❌ '+e.message);}
+    finally{unloading();}
+    return;
+  }
+
+  if(editingId){
+    // Edit legacy entry
+    const e=allEntries.find(x=>x.id===editingId);
+    const isDraft=el('f_isDone')?!el('f_isDone').checked:(e?.isDraft!==false);
+    const data={
+      worker:workerName,workerRole,
+      tanggal:el('f_tanggal').value,perusahaan:el('f_perusahaan').value.trim(),
+      pic:el('f_pic').value.trim(),jenis:selectedJob||'Lainnya',jenis_lainnya:el('f_lainnya').value.trim(),
+      waktu_mulai:el('f_mulai').value,waktu_selesai:el('f_selesai').value,
+      tasks:validTasks.map(t=>({text:t.text,minutes:t.minutes||''})),
+      deskripsi:validTasks.map(t=>t.text).join(' / '),
+      jarak:el('f_jarak').value||'0',
+      materials:matRows.filter(m=>m.name.trim()).map(m=>({name:m.name,qty:m.qty,unit:m.unit})),
+      material:matRows.filter(m=>m.name.trim()).map(m=>`${m.name}${m.qty?' '+m.qty:''}${m.unit?' '+m.unit:''}`).join('\n'),
+      catatan:el('f_catatan').value.trim(),photos:currentPhotos,isDraft,updatedAt:serverTimestamp(),
+    };
+    if(!validTasks.length&&!data.perusahaan){toast('⚠️ Isi pekerjaan!');return;}
+    loading('保存中...');
+    try{await updateDoc(doc(db,'kerja_entries',editingId),data);toast('✅ 更新しました！');goHome();}
+    catch(e){toast('❌ '+e.message);}finally{unloading();}
+    return;
+  }
+
+  // Create new project
+  if(!validTasks.length&&!el('f_perusahaan').value.trim()){toast('⚠️ 作業内容または会社名を入力してください！');return;}
+  const projectData={
+    isProject:true,
+    tanggal:el('f_tanggal').value,
+    perusahaan:el('f_perusahaan').value.trim(),
+    pic:el('f_pic').value.trim(),
+    jenis:selectedJob||'Lainnya',
+    jenis_lainnya:el('f_lainnya').value.trim(),
+    jarak:el('f_jarak').value||'0',
+    status:'active',
+    adminChecked:false,adminCheckedBy:null,
+    createdBy:workerName,
+    contributions:[contribution],
+    createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
+  };
+  loading('保存中...');
+  try{await addDoc(collection(db,'kerja_entries'),projectData);toast('✅ プロジェクトを作成しました！');goHome();}
+  catch(e){toast('❌ '+e.message);}finally{unloading();}
+};
+
+// ── PHOTO ──
+window.openCamera=()=>{if(currentPhotos.length>=20){toast('⚠️ Max 20 foto!');return;}el('cameraInput').click();};
+window.openGallery=()=>{if(currentPhotos.length>=20){toast('⚠️ Max 20 foto!');return;}el('galleryInput').click();};
+window.onPhotos=async evt=>{
+  const files=Array.from(evt.target.files||[]);if(!files.length)return;
+  const remaining=20-currentPhotos.length;
+  const toProcess=files.slice(0,remaining);
+  if(files.length>remaining)toast(`⚠️ ${files.length-remaining}枚超過`);
+  loading(`写真処理中... (0/${toProcess.length})`);
+  try{
+    for(let i=0;i<toProcess.length;i++){
+      el('loadingMsg').textContent=`写真処理中... (${i+1}/${toProcess.length})`;
+      currentPhotos.push(await compress(toProcess[i]));
+    }
+    renderFormPhotos(); toast(`✅ ${toProcess.length}枚追加`);
+  }catch{toast('❌ 写真の処理に失敗');}
+  finally{unloading();evt.target.value='';}
+};
+window.delPhoto=i=>{currentPhotos.splice(i,1);renderFormPhotos();};
+function renderFormPhotos(){
+  el('photoCount').textContent=STRINGS[lang].photoCountFn(currentPhotos.length);
+  el('formPhotoGrid').innerHTML=currentPhotos.map((s,i)=>`<div class="photo-thumb"><img src="${s}" loading="lazy"><div class="photo-del" onclick="delPhoto(${i})">✕</div></div>`).join('');
+}
+async function compress(file,size=800,q=0.72){
+  return new Promise(res=>{
+    const img=new Image(),url=URL.createObjectURL(file);
+    img.onload=()=>{URL.revokeObjectURL(url);const c=document.createElement('canvas');let w=img.width,h=img.height;if(w>h&&w>size){h=h*size/w;w=size;}else if(h>size){w=w*size/h;h=size;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);res(c.toDataURL('image/jpeg',q));};img.src=url;
+  });
+}
+
+// ── DETAIL ──
+window.openDetail=id=>{
+  detailEntryId=id;
+  const e=allEntries.find(x=>x.id===id);if(!e)return;
+  markCommentsSeen(id,(e.comments||[]).length);
+  el('detailPlaceholder')?.classList.add('hidden');
+  drawDetail(e); show('detailScreen');
+};
+
+function drawDetail(e){
+  if(e.isProject) drawProjectDetail(e);
+  else drawLegacyDetail(e);
+}
+
+function drawProjectDetail(e){
+  const job=JOB_TYPES.find(j=>j.id===e.jenis)||JOB_TYPES[5];
+  const jobName=lang==='ja'?job.ja:job.label;
+  const contribs=e.contributions||[];
+  const myContrib=contribs.find(c=>c.worker===workerName);
+  const isCreator=e.createdBy===workerName||isAdmin;
+
+  // Status banner
+  let statusCls='bg-yellow-50 border-yellow-200 text-yellow-700';
+  let statusTxt=tx('statusActive');
+  if(e.adminChecked){statusCls='bg-purple-50 border-purple-200 text-purple-700';statusTxt=tx('statusChecked');}
+  else if(e.status==='done'){statusCls='bg-green-50 border-green-200 text-green-700';statusTxt=tx('statusDone');}
+
+  const statusBanner=`<div class="${statusCls} border rounded-2xl p-3 flex items-center gap-3">
+    <span class="text-2xl">${e.adminChecked?'✔':e.status==='done'?'✅':'🔄'}</span>
+    <div class="flex-1">
+      <div class="font-bold text-sm">${statusTxt}</div>
+      ${e.adminChecked&&e.adminCheckedBy?`<div class="text-xs opacity-70">${esc(e.adminCheckedBy)}</div>`:''}
+    </div>
+  </div>`;
+
+  // Project header
+  let jam='';
+  // Aggregate all workers' time range
+  const allTimes=contribs.flatMap(c=>[c.waktu_mulai,c.waktu_selesai]).filter(Boolean);
+  // (just show per-contribution time)
+
+  const projHeader=`<div class="bg-white rounded-2xl p-4 shadow-sm">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="text-3xl">${job.icon}</span>
+      <div>
+        <div class="font-bold text-gray-800 text-lg">${jobName}</div>
+        <div class="text-sm text-gray-400">${e.tanggal||''}</div>
+      </div>
+    </div>
+    ${e.perusahaan?`<div class="flex gap-2 mb-1"><span>🏢</span><div><div class="text-xs text-gray-400">${lang==='ja'?'会社名':'Perusahaan'}</div><div class="font-semibold text-gray-800">${esc(e.perusahaan)}</div></div></div>`:''}
+    ${e.pic?`<div class="flex gap-2 mt-1"><span>👤</span><div><div class="text-xs text-gray-400">${lang==='ja'?'担当者':'PIC'}</div><div class="font-semibold text-gray-800">${esc(e.pic)}</div></div></div>`:''}
+    ${e.jarak&&e.jarak!='0'?`<div class="flex gap-2 mt-1"><span>🚗</span><div class="font-semibold text-gray-800">${e.jarak} km</div></div>`:''}
+  </div>`;
+
+  // Each contribution
+  const colors=['bg-blue-500','bg-green-500','bg-red-500','bg-purple-500','bg-orange-500','bg-pink-500'];
+  const contribSections=contribs.map((c,ci)=>{
+    const isMe=c.worker===workerName;
+    const color=colors[ci%colors.length];
+    const tasks=c.tasks||[];
+    const totalMin=tasks.reduce((s,t)=>s+(parseInt(t.minutes)||0),0);
+    let jam2='';
+    if(c.waktu_mulai&&c.waktu_selesai){
+      const [sh,sm]=c.waktu_mulai.split(':').map(Number),[eh,em]=c.waktu_selesai.split(':').map(Number);
+      let m2=(eh*60+em)-(sh*60+sm);if(m2<0)m2+=1440;
+      jam2=STRINGS[lang].totalMenit(m2);
+    }
+    return `<div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+      <div class="flex items-center gap-3 px-4 py-3 ${isMe?'bg-blue-50 border-b border-blue-100':'border-b border-gray-50'}">
+        <div class="w-avatar ${color} text-white border-2 border-white text-sm font-bold">${(c.worker||'?').charAt(0).toUpperCase()}</div>
+        <div class="flex-1">
+          <div class="font-bold text-gray-800 text-sm">${esc(c.worker||'')}${isMe?` <span class="text-xs text-blue-500 font-normal">(${lang==='ja'?'自分':'Saya'})</span>`:''}</div>
+          ${c.workerRole?`<div class="text-xs text-gray-400">${esc(c.workerRole)}</div>`:''}
+        </div>
+        ${c.waktu_mulai?`<div class="text-xs text-gray-500 text-right"><div>${c.waktu_mulai}–${c.waktu_selesai}</div>${jam2?`<div class="text-blue-500">${jam2}</div>`:''}</div>`:''}
+      </div>
+      <div class="px-4 py-3 space-y-2">
+        ${tasks.length?`<div class="space-y-1.5">
+          ${tasks.map((t,ti)=>`<div class="flex items-start gap-2">
+            <span class="w-5 h-5 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">${ti+1}</span>
+            <span class="flex-1 text-gray-800 text-sm">${esc(t.text||'')}</span>
+            ${t.minutes?`<span class="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full flex-shrink-0">${t.minutes}${tx('menit')}</span>`:''}
+          </div>`).join('')}
+          ${totalMin>0?`<div class="text-right text-xs font-bold text-blue-600">合計: ${totalMin}${tx('menit')}</div>`:''}
+        </div>`:''}
+        ${(c.materials||[]).filter(m=>m.name).length?`<div class="border-t border-gray-50 pt-2 space-y-1">
+          ${c.materials.filter(m=>m.name).map(m=>`<div class="flex items-center gap-2 text-sm">
+            <span class="text-gray-400">🔩</span>
+            <span class="flex-1 text-gray-700">${esc(m.name)}</span>
+            ${m.qty?`<span class="font-semibold text-gray-700">${esc(m.qty)}</span>`:''}
+            ${m.unit?`<span class="text-gray-400 text-xs">${esc(m.unit)}</span>`:''}
+          </div>`).join('')}
+        </div>`:''}
+        ${(c.photos||[]).length?`<div class="border-t border-gray-50 pt-2">
+          <div class="photo-grid">${c.photos.map((p,pi)=>`<div class="photo-thumb cursor-pointer" onclick="viewContribPhoto('${e.id}',${ci},${pi})"><img src="${p}" loading="lazy"></div>`).join('')}</div>
+        </div>`:''}
+        ${c.catatan?`<div class="border-t border-gray-50 pt-2 text-sm text-gray-600">📝 ${esc(c.catatan)}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Translate button helper
+  const tr=e.translation||{};
+  const jp=txt=>txt?`<div class="jp-box rounded-xl p-3 mt-2"><div class="text-xs font-bold text-amber-600 mb-1">🇯🇵 日本語訳</div><p class="text-gray-800 text-sm">${esc(txt)}</p></div>`:'';
+
+  // Action buttons
+  const canAdd=!myContrib&&e.status==='active';
+  const canEdit=!!myContrib;
+  const canDone=e.status==='active'&&(contribs.some(c=>c.worker===workerName)||isCreator);
+
+  const actionBtns=`<div class="space-y-2 pb-2">
+    ${canAdd?`<button onclick="openForm(null,null,'${e.id}')" class="w-full bg-blue-600 text-white font-bold py-3.5 rounded-2xl">${tx('addContribBtn')}</button>`:''}
+    ${canEdit?`<button onclick="openForm(null,null,'${e.id}')" class="w-full border-2 border-blue-300 text-blue-600 font-bold py-3 rounded-2xl text-sm">${tx('myContribEdit')}</button>`:''}
+    ${canDone?`<button onclick="markDone('${e.id}')" class="w-full bg-green-600 text-white font-bold py-3.5 rounded-2xl text-base">${tx('markDoneBtn')}</button>`:''}
+    ${isAdmin?`<button onclick="adminCheck('${e.id}')" class="w-full ${e.adminChecked?'bg-purple-100 text-purple-700 border-2 border-purple-300':'bg-white border-2 border-purple-300 text-purple-700'} font-bold py-3 rounded-2xl text-sm">${e.adminChecked?tx('adminUncheckBtn'):tx('adminCheckBtn')}</button>`:''}
+    ${isCreator?`<button onclick="doDelete('${e.id}')" class="w-full border-2 border-red-200 text-red-500 font-bold py-3 rounded-2xl text-sm">🗑 ${tx('hapusBtn')}</button>`:''}
+  </div>`;
+
+  const commentsSection = buildCommentsSection(e);
+  el('detailContent').innerHTML=`${statusBanner}${projHeader}${contribSections}${commentsSection}${actionBtns}`;
+}
+
+function drawLegacyDetail(e){
+  const job=JOB_TYPES.find(j=>j.id===e.jenis)||JOB_TYPES[5];
+  const tr=e.translation||{};
+  const jobName=lang==='ja'?job.ja:job.label;
+  const isOwn=e.worker===workerName;
+  const isDraft=e.isDraft===true;
+  let jam='';
+  if(e.waktu_mulai&&e.waktu_selesai){
+    const [sh,sm]=e.waktu_mulai.split(':').map(Number),[eh,em]=e.waktu_selesai.split(':').map(Number);
+    let m=(eh*60+em)-(sh*60+sm);if(m<0)m+=1440;
+    jam=STRINGS[lang].totalMenit(m);
+  }
+  const sec=(title,body)=>`<div class="bg-white rounded-2xl p-4 shadow-sm"><div class="field-label mb-2">${title}</div>${body}</div>`;
+  const jp=txt=>txt?`<div class="jp-box rounded-xl p-3 mt-2"><div class="text-xs font-bold text-amber-600 mb-1">🇯🇵 日本語訳</div><p class="text-gray-800 text-sm leading-relaxed">${esc(txt)}</p></div>`:'';
+  let banner='';
+  if(!isOwn) banner=`<div class="bg-blue-50 border border-blue-200 rounded-2xl p-3 flex items-center gap-3"><span class="text-2xl">👤</span><div><div class="font-bold text-blue-700 text-sm">${esc(e.worker||'')}</div><div class="text-xs text-blue-400">${esc(e.workerRole||'')}</div></div></div>`;
+  else if(isDraft) banner=`<div class="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-center gap-3"><span class="text-2xl">✏️</span><div class="flex-1"><div class="font-bold text-amber-700 text-sm">下書き / Draft</div></div></div>`;
+  else banner=`<div class="bg-green-50 border border-green-200 rounded-2xl p-3 flex items-center gap-3"><span class="text-2xl">✅</span><div class="font-bold text-green-700 text-sm">${lang==='ja'?'送信済み':'Sudah Dikirim'}</div></div>`;
+  const tasks=e.tasks||[];
+  const totalMin=tasks.reduce((s,t)=>s+(parseInt(t.minutes)||0),0);
+  const taskHtml=tasks.length?`<div class="space-y-2">${tasks.map((t,i)=>`<div class="flex items-start gap-3 py-2 ${i<tasks.length-1?'border-b border-gray-50':''}"><span class="flex-shrink-0 w-5 h-5 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xs font-bold mt-0.5">${i+1}</span><span class="flex-1 text-gray-800 text-sm">${esc(t.text||'')}</span>${t.minutes?`<span class="flex-shrink-0 text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">${t.minutes}${tx('menit')}</span>`:''}</div>`).join('')}${totalMin>0?`<div class="pt-2 text-right text-xs font-bold text-blue-600">合計: ${totalMin}${tx('menit')}</div>`:''}</div>${jp(tr.tasks)}`:(e.deskripsi?`<p class="text-gray-800 text-sm">${esc(e.deskripsi)}</p>${jp(tr.deskripsi)}`:'');
+  let matHtml='';
+  if(Array.isArray(e.materials)&&e.materials.filter(m=>m.name).length){
+    matHtml=sec(`🔩 ${tx('matLabel')}`,e.materials.filter(m=>m.name).map((m,i)=>`<div class="flex items-center gap-3 py-1.5 ${i<e.materials.length-1?'border-b border-gray-50':''}"><span class="flex-1 text-gray-800 text-sm">${esc(m.name)}</span>${m.qty?`<span class="font-semibold text-gray-700 text-sm">${esc(m.qty)}</span>`:''}${m.unit?`<span class="text-gray-400 text-xs">${esc(m.unit)}</span>`:''}</div>`).join('')+jp(tr.material));
+  }else if(e.material){matHtml=sec(`🔩 ${tx('matLabel')}`,`<p class="text-sm text-gray-800 whitespace-pre-line">${esc(e.material)}</p>${jp(tr.material)}`);}
+  let actionBtns='';
+  if(isOwn) actionBtns=`<div class="flex gap-3 pb-2"><button onclick="openForm('${e.id}')" class="flex-1 border-2 border-blue-300 text-blue-600 font-bold py-3 rounded-2xl">✏️ ${tx('editBtn')}</button><button onclick="doDelete('${e.id}')" class="flex-1 border-2 border-red-200 text-red-500 font-bold py-3 rounded-2xl">🗑 ${tx('hapusBtn')}</button></div>`;
+  else actionBtns=`<button onclick="openForm(null,'${e.tanggal||''}')" class="w-full bg-blue-600 text-white font-bold py-3.5 rounded-2xl text-sm">+ ${lang==='ja'?'自分の作業を追加':'Tambah catatan saya'}</button>`;
+  const commentsSection=buildCommentsSection(e);
+  el('detailContent').innerHTML=`${banner}${sec(`${job.icon} ${jobName} <span class="font-normal text-gray-400 text-sm">${e.tanggal||''}</span>`,`<div class="flex flex-wrap gap-2 text-sm">${e.waktu_mulai?`<div class="bg-gray-50 rounded-xl px-3 py-2"><span class="text-xs text-gray-400">⏰ ${tx('durLabel')}</span><div class="font-bold text-gray-700">${e.waktu_mulai}–${e.waktu_selesai}</div>${jam?`<div class="text-xs text-blue-600">${jam}</div>`:''}</div>`:''}</div>`)}${e.perusahaan||e.pic?sec(`🏢 ${lang==='ja'?'クライアント':'Klien'}`,`${e.perusahaan?`<div class="flex gap-2 mb-2"><span class="text-lg">🏢</span><div><div class="text-xs text-gray-400">${lang==='ja'?'会社名':'Perusahaan'}</div><div class="font-semibold text-gray-800">${esc(e.perusahaan)}</div></div></div>`:''}${e.pic?`<div class="flex gap-2"><span class="text-lg">👤</span><div><div class="text-xs text-gray-400">${lang==='ja'?'担当者':'PIC'}</div><div class="font-semibold text-gray-800">${esc(e.pic)}</div></div></div>`:''}`):''} ${tasks.length||e.deskripsi?sec(`📋 ${lang==='ja'?'作業内容':'Isi Pekerjaan'}`,taskHtml):''}${matHtml}${e.catatan?sec(`📝 ${lang==='ja'?'備考':'Catatan'}`,`<p class="text-gray-800 text-sm">${esc(e.catatan)}</p>${jp(tr.catatan)}`):''} ${(e.photos||[]).length?sec(`📸 ${lang==='ja'?'写真':'Foto'} (${e.photos.length})`,`<div class="photo-grid">${e.photos.map((p,i)=>`<div class="photo-thumb cursor-pointer" onclick="viewPhoto('${e.id}',${i})"><img src="${p}" loading="lazy"></div>`).join('')}</div>`):''} ${commentsSection}${actionBtns}`;
+}
+
+// ── PROJECT ACTIONS ──
+window.markDone = async id => {
+  if(!confirm(lang==='ja'?'プロジェクトを完了にしますか？':'Selesaikan proyek ini?')) return;
+  loading('更新中...');
+  try{
+    await updateDoc(doc(db,'kerja_entries',id),{status:'done',doneAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    const idx=allEntries.findIndex(e=>e.id===id);
+    if(idx>=0){allEntries[idx]={...allEntries[idx],status:'done'};drawDetail(allEntries[idx]);}
+    toast('✅ 仕事完了！');
+  }catch(e){toast('❌ '+e.message);}
+  finally{unloading();}
+};
+
+window.adminCheck = async id => {
+  const e=allEntries.find(x=>x.id===id);if(!e)return;
+  const newVal=!e.adminChecked;
+  loading('更新中...');
+  try{
+    await updateDoc(doc(db,'kerja_entries',id),{
+      adminChecked:newVal, adminCheckedBy:newVal?workerName:null, updatedAt:serverTimestamp()
+    });
+    const idx=allEntries.findIndex(x=>x.id===id);
+    if(idx>=0){allEntries[idx]={...allEntries[idx],adminChecked:newVal,adminCheckedBy:newVal?workerName:null};drawDetail(allEntries[idx]);}
+    toast(newVal?'✔ 管理者チェック済み！':'✔ チェック解除');
+  }catch(e){toast('❌ '+e.message);}
+  finally{unloading();}
+};
+
+// ── TRANSLATE ──
+window.doTranslate=async()=>{
+  const entry=allEntries.find(e=>e.id===detailEntryId);if(!entry)return;
+  if(entry.isProject){toast('⚠️ プロジェクトはリスト内の各作業を翻訳してください');return;}
+  const btn=el('translateBtn');btn.textContent='⏳...';btn.disabled=true;
+  try{
+    const tr={};
+    const tasks=entry.tasks||[];
+    if(tasks.length){const combined=tasks.map((t,i)=>`${i+1}. ${t.text}`).join('\n');tr.tasks=await xlate(combined);await delay(400);}
+    for(const f of ['catatan','perusahaan']){if(entry[f]){tr[f]=await xlate(entry[f]);await delay(400);}}
+    if(Array.isArray(entry.materials)&&entry.materials.length){
+      const mt=entry.materials.filter(m=>m.name).map(m=>m.name).join(', ');
+      if(mt){tr.material=await xlate(mt);await delay(400);}
+    }else if(entry.material){tr.material=await xlate(entry.material);await delay(400);}
+    await updateDoc(doc(db,'kerja_entries',detailEntryId),{translation:tr});
+    const idx=allEntries.findIndex(e=>e.id===detailEntryId);
+    if(idx>=0)allEntries[idx].translation=tr;
+    drawDetail({...entry,translation:tr});
+    toast('🇯🇵 翻訳完了！');
+  }catch(e){toast('❌ Terjemahan gagal: '+e.message);}
+  finally{btn.innerHTML='🇯🇵 日本語訳';btn.disabled=false;}
+};
+async function xlate(text){
+  const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0,500))}&langpair=id|ja`);
+  const d=await r.json();
+  if(d.responseStatus===200)return d.responseData.translatedText;
+  throw new Error(d.responseDetails||'Error');
+}
+
+// ── DELETE ──
+window.doDelete=async id=>{
+  if(!confirm('Hapus?\n削除しますか？'))return;
+  loading('削除中...');
+  try{await deleteDoc(doc(db,'kerja_entries',id));toast('🗑 削除しました');goHome();}
+  catch{toast('❌ 削除失敗');}
+  finally{unloading();}
+};
+
+// ── COMMENTS SECTION BUILDER ──
+function buildCommentsSection(e){
+  const comments=e.comments||[];
+  return `<div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+      <span class="text-base">💬</span>
+      <span class="font-bold text-gray-800 text-sm">${lang==='ja'?'コメント':'Komentar'}</span>
+      ${comments.length?`<span class="text-xs bg-orange-100 text-orange-600 font-bold px-2 py-0.5 rounded-full">${comments.length}</span>`:''}
+    </div>
+    ${comments.length?`<div class="px-4 py-3 space-y-2" id="commentsList_${e.id}">
+      ${comments.map(c=>`<div class="comment-bubble${c.worker===workerName?' mine':''}">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="font-bold text-sm text-gray-800">${esc(c.worker||'')}</span>
+          <span class="text-xs text-gray-400">${new Date(c.addedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+        </div>
+        <p class="text-sm text-gray-700 whitespace-pre-wrap">${esc(c.text||'')}</p>
+      </div>`).join('')}
+    </div>`:''}
+    <div class="px-4 py-3 border-t border-gray-100 flex gap-2 items-end">
+      <textarea id="commentInput_${e.id}" rows="2" placeholder="${lang==='ja'?'コメントを入力...':'Tulis komentar...'}" class="flex-1 field-input text-sm resize-none" style="min-height:44px"></textarea>
+      <button onclick="addComment('${e.id}')" class="bg-blue-600 text-white font-bold px-4 py-2.5 rounded-xl text-sm flex-shrink-0">${lang==='ja'?'送信':'Kirim'}</button>
+    </div>
+  </div>`;
+}
+
+// ── COMMENTS ──
+window.addComment = async id => {
+  const input = el(`commentInput_${id}`);
+  if(!input) return;
+  const text = input.value.trim();
+  if(!text){toast('⚠️ コメントを入力してください');return;}
+
+  const e = allEntries.find(x=>x.id===id);
+  if(!e) return;
+
+  const comment = {
+    worker: workerName,
+    text,
+    addedAt: new Date().toISOString()
+  };
+
+  loading(lang==='ja'?'送信中...':'Mengirim...');
+  try {
+    const newComments = [...(e.comments||[]), comment];
+    await updateDoc(doc(db,'kerja_entries',id), {
+      comments: newComments,
+      updatedAt: serverTimestamp()
+    });
+    const idx = allEntries.findIndex(x=>x.id===id);
+    if(idx>=0) allEntries[idx] = {...allEntries[idx], comments: newComments};
+    markCommentsSeen(id, newComments.length);
+    drawDetail(allEntries[idx>=0?idx:0] || e);
+    toast(lang==='ja'?'💬 コメントを送信しました！':'💬 Komentar terkirim!');
+    setTimeout(()=>{const cl=el(`commentsList_${id}`);if(cl)cl.scrollIntoView({behavior:'smooth',block:'end'});},100);
+  } catch(err) {
+    toast('❌ '+err.message);
+  } finally {
+    unloading();
+  }
+};
+
+// ── PHOTO VIEWER ──
+window.viewPhoto=(id,i)=>{const e=allEntries.find(x=>x.id===id);if(!e)return;el('photoViewerImg').src=e.photos[i];el('photoViewer').classList.remove('hidden');};
+window.viewContribPhoto=(projId,ci,pi)=>{const e=allEntries.find(x=>x.id===projId);if(!e)return;el('photoViewerImg').src=e.contributions[ci].photos[pi];el('photoViewer').classList.remove('hidden');};
+window.closePhotoViewer=()=>el('photoViewer').classList.add('hidden');
+
+// ── PROFILE MODAL ──
+window.openProfileModal=()=>{
+  el('pm_name').value=workerName;el('pm_role').value=workerRole;
+  el('pm_admin').checked=isAdmin;
+  el('profileModal').classList.remove('hidden');
+};
+window.closeProfileModal=()=>el('profileModal').classList.add('hidden');
+window.updateProfile=()=>{
+  const n=el('pm_name').value.trim();if(!n){toast('⚠️ Masukkan nama!');return;}
+  workerName=n;workerRole=el('pm_role').value.trim();
+  isAdmin=el('pm_admin').checked;
+  localStorage.setItem('kerjaName',workerName);localStorage.setItem('kerjaRole',workerRole);
+  localStorage.setItem('kerjaAdmin',isAdmin?'true':'false');
+  el('homeAvatar').textContent=workerName.charAt(0).toUpperCase();
+  closeProfileModal();toast('✅ 更新しました！');renderList();
+};
+window.resetConfig=()=>{
+  if(confirm('Reset?')){['kerjaCfg','kerjaName','kerjaRole','kerjaAdmin'].forEach(k=>localStorage.removeItem(k));location.reload();}
+};
+
+function isDesktop(){return window.innerWidth>=768;}
+
+window.goHome=()=>show('homeScreen');
+
+// ── UTILS ──
+function show(id){
+  // Clear all screens and form overlay
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('show'));
+  el('formScreen')?.classList.remove('desktop-open');
+
+  if(isDesktop()){
+    el('bottomNav').classList.add('hidden');
+    if(id==='homeScreen'){
+      el('homeScreen').classList.add('show');
+      el('detailScreen').classList.add('show');
+      el('detailPlaceholder')?.classList.remove('hidden');
+      el('detailContent').innerHTML='';
+      detailEntryId=null;
+    } else if(id==='detailScreen'){
+      el('homeScreen').classList.add('show');
+      el('detailScreen').classList.add('show');
+      el('detailPlaceholder')?.classList.add('hidden');
+    } else if(id==='formScreen'){
+      el('homeScreen').classList.add('show');
+      el('detailScreen').classList.add('show');
+      el('formScreen').classList.add('desktop-open');
+    } else {
+      // setupScreen / profileScreen: position:fixed overlay via CSS
+      el(id)?.classList.add('show');
+    }
+    return;
+  }
+  // Mobile: simple show/hide
+  el(id)?.classList.add('show');
+  el('bottomNav').classList.toggle('hidden',!['homeScreen','formScreen','detailScreen'].includes(id));
+}
+function el(id){return document.getElementById(id);}
+function v(id){return el(id)?.value.trim()||'';}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');}
+function delay(ms){return new Promise(r=>setTimeout(r,ms));}
+let _tt;
+function toast(msg){const t=el('toast'),m=el('toastMsg');m.textContent=msg;t.classList.remove('hidden');clearTimeout(_tt);_tt=setTimeout(()=>t.classList.add('hidden'),3200);}
+function loading(msg){el('loadingMsg').textContent=msg||'';el('loading').classList.remove('hidden');}
+function unloading(){el('loading').classList.add('hidden');}
+</script>
+</body>
+</html>
