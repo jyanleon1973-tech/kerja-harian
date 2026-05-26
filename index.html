@@ -1083,6 +1083,9 @@ function drawDetail(e){
   const titleEl=el('detailTitle');
   if(titleEl) titleEl.textContent=(lang==='ja'?job.ja:job.label)+(e.tanggal?' ('+e.tanggal+')':'');
   el('detailContent').innerHTML='';
+  // スクロールを先頭に戻す
+  const scrollArea=el('detailContent')?.parentElement;
+  if(scrollArea) scrollArea.scrollTop=0;
   if(e.isProject) drawProjectDetail(e);
   else drawLegacyDetail(e);
 }
@@ -1092,7 +1095,7 @@ function drawProjectDetail(e){
   const jobName=lang==='ja'?job.ja:job.label;
   const contribs=e.contributions||[];
   const myContrib=contribs.find(c=>c.worker===workerName);
-  const isCreator=isAdmin||!e.createdBy||e.createdBy===workerName;
+  const isCreator=isAdmin||!e.createdBy||e.createdBy===workerName||!!myContrib;
 
   // Status banner
   let statusCls='bg-yellow-50 border-yellow-200 text-yellow-700';
