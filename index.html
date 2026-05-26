@@ -1124,7 +1124,7 @@ function drawProjectDetail(e){
         <div class="font-bold text-gray-800 text-lg">${jobName}</div>
         <div class="text-sm text-gray-400">${e.tanggal||''}</div>
       </div>
-      ${isCreator?`<button onclick="doDelete('${e.id}')" class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full border-2 border-red-200 text-red-400 hover:bg-red-50 text-base" title="${lang==='ja'?'削除':'Hapus'}">🗑</button>`:''}
+      <button onclick="doDelete('${e.id}')" class="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full border-2 border-red-200 text-red-400 hover:bg-red-50 text-base" title="${lang==='ja'?'削除':'Hapus'}">🗑</button>
     </div>
     ${e.perusahaan?`<div class="flex gap-2 mb-1"><span>🏢</span><div><div class="text-xs text-gray-400">${lang==='ja'?'会社名':'Perusahaan'}</div><div class="font-semibold text-gray-800">${esc(e.perusahaan)}</div></div></div>`:''}
     ${e.pic?`<div class="flex gap-2 mt-1"><span>👤</span><div><div class="text-xs text-gray-400">${lang==='ja'?'担当者':'PIC'}</div><div class="font-semibold text-gray-800">${esc(e.pic)}</div></div></div>`:''}
@@ -1289,6 +1289,10 @@ async function xlate(text){
 
 // ── DELETE ──
 window.doDelete=async id=>{
+  const e=allEntries.find(x=>x.id===id);
+  if(e?.isProject && e?.createdBy && e.createdBy!==workerName && !isAdmin){
+    toast(lang==='ja'?'⚠️ 作成者のみ削除できます':'⚠️ Hanya pembuat yang bisa menghapus');return;
+  }
   if(!confirm('Hapus?\n削除しますか？'))return;
   loading('削除中...');
   try{await deleteDoc(doc(db,'kerja_entries',id));toast('🗑 削除しました');goHome();}
