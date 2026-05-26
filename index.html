@@ -21,8 +21,18 @@
     .photo-thumb { aspect-ratio:1; border-radius:10px; overflow:hidden; position:relative; }
     .photo-thumb img { width:100%; height:100%; object-fit:cover; }
     .photo-del { position:absolute; top:4px; right:4px; background:rgba(0,0,0,.6); border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; color:white; font-size:11px; cursor:pointer; }
-    .entry-card { transition:transform .1s; }
-    .entry-card:active { transform:scale(.98); }
+    .entry-card { }
+    /* スワイプ削除 */
+    .swipe-wrap { position:relative; overflow:hidden; border-radius:1rem; box-shadow:0 1px 2px 0 rgb(0 0 0/.06); }
+    .swipe-card  { position:relative; z-index:1; will-change:transform; }
+    .swipe-del   { position:absolute; right:0; top:0; bottom:0; width:78px; background:#EF4444; color:white; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; font-size:22px; cursor:pointer; user-select:none; z-index:0; }
+    .swipe-del span { font-size:10px; font-weight:700; letter-spacing:.04em; }
+    .desk-del { display:none; position:absolute; top:8px; right:8px; width:28px; height:28px; border-radius:50%; border:1.5px solid rgba(239,68,68,.35); background:white; color:#EF4444; font-size:13px; cursor:pointer; z-index:10; align-items:center; justify-content:center; line-height:1; }
+    @media (hover:hover) {
+      .desk-del { display:flex; opacity:0; transition:opacity .15s; }
+      .swipe-wrap:hover .desk-del { opacity:1; }
+      .swipe-del { display:none; }
+    }
     .jp-box { background:linear-gradient(135deg,#FEF3C7,#FFF7ED); border-left:4px solid #F59E0B; }
     @keyframes spin { to { transform:rotate(360deg); } }
     .spin { animation:spin .8s linear infinite; }
@@ -627,6 +637,7 @@ function renderList(){
     if(e.isProject) return renderProjectCard(e, bar);
     return renderLegacyCard(e, bar);
   }).join('');
+  requestAnimationFrame(initSwipe);
 }
 
 function renderProjectCard(e, bar){
@@ -658,7 +669,10 @@ function renderProjectCard(e, bar){
   // Total photos
   const totalPhotos=contribs.reduce((s,c)=>s+(c.photos||[]).length,0);
 
-  return `<div class="entry-card ${cardCls} rounded-2xl shadow-sm overflow-hidden cursor-pointer" onclick="openDetail('${e.id}')">
+  return `<div class="swipe-wrap">
+  <div class="swipe-del" onclick="event.stopPropagation();doDelete('${e.id}')">🗑<span>${lang==='ja'?'削除':'Hapus'}</span></div>
+  <div class="swipe-card entry-card ${cardCls} overflow-hidden cursor-pointer" onclick="openDetail('${e.id}')">
+    <button class="desk-del" onclick="event.stopPropagation();doDelete('${e.id}')">🗑</button>
     <div class="flex items-stretch">
       <div class="w-2 ${bar[e.jenis]||'bg-gray-400'} flex-shrink-0"></div>
       <div class="flex-1 p-4">
@@ -685,7 +699,8 @@ function renderProjectCard(e, bar){
         </div>
       </div>
     </div>
-  </div>`;
+  </div>
+</div>`;
 }
 
 function renderLegacyCard(e, bar){
@@ -702,7 +717,10 @@ function renderLegacyCard(e, bar){
   if(isOwn&&isDraft) badges+=`<span class="text-xs bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded-full">✏️ Draft</span>`;
   else if(isOwn&&!isDraft) badges+=`<span class="text-xs bg-green-100 text-green-700 font-bold px-2 py-0.5 rounded-full">✅</span>`;
   if(viewMode==='team') badges+=`<span class="text-xs bg-blue-100 text-blue-700 font-bold px-2 py-0.5 rounded-full ${hasNewComments(e)?'comment-new-name':''}">👤 ${esc(e.worker||'')}</span>`;
-  return `<div class="entry-card bg-white rounded-2xl shadow-sm overflow-hidden cursor-pointer" onclick="openDetail('${e.id}')">
+  return `<div class="swipe-wrap">
+  <div class="swipe-del" onclick="event.stopPropagation();doDelete('${e.id}')">🗑<span>${lang==='ja'?'削除':'Hapus'}</span></div>
+  <div class="swipe-card entry-card bg-white overflow-hidden cursor-pointer" onclick="openDetail('${e.id}')">
+    <button class="desk-del" onclick="event.stopPropagation();doDelete('${e.id}')">🗑</button>
     <div class="flex items-stretch">
       <div class="w-1.5 ${bar[e.jenis]||'bg-gray-400'} flex-shrink-0"></div>
       <div class="flex-1 p-4">
@@ -722,7 +740,8 @@ function renderLegacyCard(e, bar){
         </div>
       </div>
     </div>
-  </div>`;
+  </div>
+</div>`;
 }
 
 window.setFilter = f => {
@@ -1285,6 +1304,45 @@ async function xlate(text){
   const d=await r.json();
   if(d.responseStatus===200)return d.responseData.translatedText;
   throw new Error(d.responseDetails||'Error');
+}
+
+// ── SWIPE TO DELETE ──
+function initSwipe(){
+  let lastCard=null;
+  const close=card=>{if(!card)return;card.style.transition='transform .25s ease';card.style.transform='';card._swiped=false;};
+  document.querySelectorAll('.swipe-wrap:not([data-si])').forEach(wrap=>{
+    wrap.setAttribute('data-si','1');
+    const card=wrap.querySelector('.swipe-card');
+    if(!card){return;}
+    const W=78;
+    let sx=0,sy=0,dx=0,tracking=false,horiz=false;
+    card.addEventListener('touchstart',e=>{
+      if(lastCard&&lastCard!==card) close(lastCard);
+      sx=e.touches[0].clientX; sy=e.touches[0].clientY;
+      dx=0; tracking=true; horiz=false;
+      card.style.transition='none';
+    },{passive:true});
+    card.addEventListener('touchmove',e=>{
+      if(!tracking) return;
+      const cx=e.touches[0].clientX, cy=e.touches[0].clientY;
+      dx=cx-sx;
+      if(!horiz){
+        if(Math.abs(cy-sy)>Math.abs(dx)+4){tracking=false;close(card);return;}
+        if(Math.abs(dx)>4) horiz=true; else return;
+      }
+      const base=card._swiped?-W:0;
+      card.style.transform=`translateX(${Math.max(-W,Math.min(0,base+dx))}px)`;
+    },{passive:true});
+    card.addEventListener('touchend',()=>{
+      if(!tracking) return; tracking=false;
+      const base=card._swiped?-W:0;
+      if(base+dx < -W/2){card.style.transition='transform .25s ease';card.style.transform=`translateX(-${W}px)`;card._swiped=true;lastCard=card;}
+      else{close(card);if(lastCard===card)lastCard=null;}
+    });
+    card.addEventListener('click',e=>{
+      if(card._swiped){e.stopPropagation();close(card);lastCard=null;}
+    },true);
+  });
 }
 
 // ── DELETE ──
