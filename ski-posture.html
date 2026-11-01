@@ -55,7 +55,7 @@
   .transport button { min-width:46px; padding:10px 12px; font-size:16px; }
   .time { font-variant-numeric:tabular-nums; font-size:13px; color:#94A3B8; text-align:center; }
   .metrics { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
-  @media (min-width:600px) { .metrics { grid-template-columns:repeat(4,1fr); } }
+  @media (min-width:600px) { .metrics { grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); } }
   .metric { background:#0F172A; border-radius:10px; padding:10px 12px; }
   .metric .k { font-size:11px; color:#94A3B8; }
   .metric .v { font-size:22px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums; }
@@ -194,7 +194,7 @@
       </div>
       <p class="note" style="margin:10px 0 0">
         重心は関節位置と人体部位の質量比（de Leva 1996）から推定した「姿勢上の重心」です。板への実際の荷重ではありません。
-        前後・左右の基準はスキーヤーの骨盤の向きから求めた進行方向です。板の向きはかかととつま先の向きで代用した推定値です。
+        前後・左右の基準はスキーヤーの骨盤の向きから求めた進行方向です。板の向きは、足元の映像から細長い物体の向きを検出し（元動画に太い線で表示）、体の 3D 座標との対応で水平面の向きに変換しています。検出できないコマ（細い線・薄い板）は足の向きで代用します。
         鉛直の基準はカメラの上下方向なので、斜面を見上げ・見下ろして撮った映像では前傾角に、カメラが傾いていれば内傾角にその分が足されます。上のスライダーで補正できます。
         1台のカメラからの奥行きは近似のため、角度は数度の誤差を含みます。撮影条件は、固定カメラ・真横または斜め前・人物が画面の1/3以上の大きさが目安です。
       </p>
@@ -320,7 +320,7 @@ async function analyze() {
     const end = rangeV === 'all' ? video.duration : Math.min(video.duration, +rangeV);
     const total = Math.floor(end / dt);
     video.pause();
-    frames = []; worldSmooth = []; fwdArr = []; floorArr = []; trailPts = []; analyzed = false;
+    frames = []; worldSmooth = []; fwdArr = []; floorArr = []; skiArr = []; trailPts = []; analyzed = false; footLenHist.length = 0; footRatioHist.length = 0;
     if (trailLine) trailLine.geometry.setFromPoints([]);
     const vw = video.videoWidth, vh = video.videoHeight;
     // 追跡用の切り出し領域（ピクセル）。人が小さく映っていても拡大して検出できるようにする
@@ -362,7 +362,9 @@ async function analyze() {
       // 骨の長さが今までの中央値と大きく違う検出（別人や崩れた推定）は捨てる
       if (det && !boneOk(det.world, boneHist)) det = null;
       if (det) {
-        frames.push({ t, lm: det.lm, world: det.world, src: 'det' });
+        let ski = null;
+        try { ski = detectSkis(det.lm, det.world, vw, vh); } catch (e) { console.warn('ski', e); }
+        frames.push({ t, lm: det.lm, world: det.world, src: 'det', ski });
         pushBones(det.world, boneHist);
         const b = bboxOf(det.lm);
         const size = Math.max(b.w * vw, b.h * vh) * 1.6;
@@ -469,6 +471,192 @@ function boneOk(w, hist) {
   }
   return bad < 2;
 }
+// ---------- 板の検出 ----------
+// 1) 足元の小窓で画像のエッジ方向ヒストグラムを取り、足元を通る細長い物体（板）の向きを 2D で求める
+// 2) 体の 3D 座標と 2D 座標の対応から弱透視カメラを当てはめ、2D の向きと矛盾しない水平な 3D 向きを求める
+const skiCv = document.createElement('canvas'); skiCv.width = skiCv.height = 96;
+const skiCtx = skiCv.getContext('2d', { willReadFrequently: true });
+function skiEdge2D(lm, side, vw, vh, bh) {
+  const ank = lm[27 + side], heel = lm[29 + side], toe = lm[31 + side];
+  if ((ank.visibility ?? 1) < 0.3) return null;
+  const S = Math.max(40, Math.min(420, bh * 0.55));
+  const fx = (heel.x + toe.x) / 2 * vw, fy = (heel.y + toe.y) / 2 * vh;
+  const x0 = fx - S / 2, y0 = fy - S / 2 + S * 0.1;
+  const N = 96;
+  skiCtx.drawImage(video, x0, y0, S, S, 0, 0, N, N);
+  const img = skiCtx.getImageData(0, 0, N, N).data;
+  const g = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) g[i] = 0.299 * img[i * 4] + 0.587 * img[i * 4 + 1] + 0.114 * img[i * 4 + 2];
+  const ankY = (ank.y * vh - y0) / S * N, cxw = (fx - x0) / S * N, cyw = (fy - y0) / S * N;
+  const bins = 36, hist = new Float32Array(bins); let total = 0;
+  for (let y = 1; y < N - 1; y++) {
+    if (y < ankY - N * 0.06) continue; // 足首より上（脚・ブーツ）は除外
+    for (let x = 1; x < N - 1; x++) {
+      const i = y * N + x;
+      const gx = (g[i + 1] - g[i - 1]) * 2 + (g[i - N + 1] - g[i - N - 1]) + (g[i + N + 1] - g[i + N - 1]);
+      const gy = (g[i + N] - g[i - N]) * 2 + (g[i + N + 1] - g[i - N + 1]) + (g[i + N - 1] - g[i - N - 1]);
+      const m = Math.hypot(gx, gy); if (m < 60) continue;
+      let th = Math.atan2(gy, gx) + Math.PI / 2; // 線の向き（勾配に直交）
+      th = ((th % Math.PI) + Math.PI) % Math.PI;
+      // 足元を通らない線（斜面の縁、他の人など）は除外
+      const dist = Math.abs((x - cxw) * Math.sin(th) - (y - cyw) * Math.cos(th));
+      if (dist > N * 0.14) continue;
+      total += m;
+      const b = th / Math.PI * bins, b0 = Math.floor(b) % bins, b1 = (b0 + 1) % bins, fr = b - Math.floor(b);
+      hist[b0] += m * (1 - fr); hist[b1] += m * fr;
+    }
+  }
+  if (total < 300) return null;
+  const sm = new Float32Array(bins);
+  for (let i = 0; i < bins; i++) sm[i] = (hist[(i - 1 + bins) % bins] + 2 * hist[i] + hist[(i + 1) % bins]) / 4;
+  let pk = 0; for (let i = 1; i < bins; i++) if (sm[i] > sm[pk]) pk = i;
+  const l = sm[(pk - 1 + bins) % bins], c = sm[pk], r = sm[(pk + 1) % bins];
+  const den = l - 2 * c + r, off = den ? (l - r) / (2 * den) : 0;
+  const ang = ((pk + off) / bins) * Math.PI;
+  const strength = (l + c + r) / total; // ±5° の帯に集まるエッジの割合
+  return { ang, strength, S, fx, fy };
+}
+function inv3(M) {
+  const [a, b, c] = M[0], [d, e, f] = M[1], [g, h, i] = M[2];
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const det = a * A + b * B + c * C; if (Math.abs(det) < 1e-12) return null;
+  return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det],
+          [B / det, (a * i - c * g) / det, -(a * f - c * d) / det],
+          [C / det, -(a * h - b * g) / det, (a * e - b * d) / det]];
+}
+// 弱透視カメラ: 画像px ≈ A・world + b を最小二乗で当てはめる（向きだけ使うので b は不要）
+function fitCamera(lm, world, vw, vh) {
+  const ids = []; for (let i = 11; i <= 28; i++) if ((lm[i].visibility ?? 1) > 0.5) ids.push(i);
+  if (ids.length < 6) return null;
+  let mx = 0, my = 0, mz = 0, mu = 0, mv = 0;
+  for (const i of ids) { mx += world[i].x; my += world[i].y; mz += world[i].z; mu += lm[i].x * vw; mv += lm[i].y * vh; }
+  const n = ids.length; mx /= n; my /= n; mz /= n; mu /= n; mv /= n;
+  const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], bu = [0, 0, 0], bv = [0, 0, 0];
+  for (const i of ids) {
+    const X = [world[i].x - mx, world[i].y - my, world[i].z - mz], u = lm[i].x * vw - mu, v = lm[i].y * vh - mv;
+    for (let r = 0; r < 3; r++) { for (let c = 0; c < 3; c++) M[r][c] += X[r] * X[c]; bu[r] += X[r] * u; bv[r] += X[r] * v; }
+  }
+  for (let r = 0; r < 3; r++) M[r][r] += 1e-3;
+  const inv = inv3(M); if (!inv) return null;
+  const row = b => [0, 1, 2].map(r => inv[r][0] * b[0] + inv[r][1] * b[1] + inv[r][2] * b[2]);
+  const A = [row(bu), row(bv)];
+  const scale = Math.hypot(A[0][0], A[1][0]); // 1m あたりの px（横方向）
+  return { A, scale };
+}
+// 水平面の基底（MediaPipe 座標）: e1 = 画像の横方向に最もよく対応する水平方向、e2 = 奥行き方向
+function horizBasis(cam) {
+  const A = cam.A; let e1 = [A[0][0], A[0][2]]; const l = Math.hypot(e1[0], e1[1]) || 1; e1 = [e1[0] / l, e1[1] / l];
+  const e2 = [-e1[1], e1[0]];
+  const proj = e => Math.hypot(A[0][0] * e[0] + A[0][2] * e[1], A[1][0] * e[0] + A[1][2] * e[1]);
+  const scaleH = proj(e1);                       // e1 方向 1m あたりの px
+  const pitch = Math.abs(A[1][0] * e2[0] + A[1][2] * e2[1]) / (scaleH || 1); // 奥行き方向が画像の縦に出る度合い ≈ sin(カメラ俯角)
+  return { e1, e2, scaleH, pitch };
+}
+// 2D の線の向きから、投影がそれに一致する水平な 3D 向き（MediaPipe 座標の yaw）を選ぶ。pref は事前の向き（x,z）
+// カメラがほぼ水平だと、どの水平方向も画像では水平に見えて区別できないため、俯角が小さい時は使わない
+function liftSki(ang2d, cam, pref) {
+  let best = null, bestScore = -Infinity;
+  for (let deg = 0; deg < 360; deg += 2) {
+    const th = deg * Math.PI / 180, dx = Math.cos(th), dz = Math.sin(th);
+    const px = cam.A[0][0] * dx + cam.A[0][2] * dz, py = cam.A[1][0] * dx + cam.A[1][2] * dz;
+    const len = Math.hypot(px, py); if (len < 1e-6) continue;
+    const phi = Math.atan2(py, px);
+    let diff = Math.abs(phi - ang2d) % Math.PI; diff = Math.min(diff, Math.PI - diff);
+    if (diff > 7 * Math.PI / 180) continue;
+    const dot = dx * pref[0] + dz * pref[1];
+    const score = dot - diff * 2;
+    if (score > bestScore) { bestScore = score; best = { th, diff, dot, fore: len / cam.scale }; }
+  }
+  return best;
+}
+// 画像上の見かけの長さ（短縮）から、水平面内の向きを求める。c = 見かけの長さ / 本来の長さ = cos(画像面からの角)
+// 画像の横方向の符号と、奥行き(z)の符号で向きを決める
+function yawFromForeshortening(dx2d, c, zsign, hb) {
+  c = Math.max(0, Math.min(1, c));
+  const s = Math.sqrt(1 - c * c);
+  const sx = dx2d >= 0 ? 1 : -1;
+  const sz = (zsign * hb.e2[1] >= 0) ? 1 : -1; // e2 の z 成分の符号と合わせる
+  return [c * sx * hb.e1[0] + s * sz * hb.e2[0], c * sx * hb.e1[1] + s * sz * hb.e2[1]];
+}
+// 板の見かけの長さ: 検出した線に沿って足元から両側へ進み、雪より暗い画素が続く範囲を測る（px）
+const lenCv = document.createElement('canvas'); lenCv.width = lenCv.height = 192;
+const lenCtx = lenCv.getContext('2d', { willReadFrequently: true });
+function measureSkiLen(ang2d, fx, fy, bh) {
+  const S = Math.min(Math.max(bh * 2.6, 120), 1400), N = 192, x0 = fx - S / 2, y0 = fy - S / 2;
+  lenCtx.drawImage(video, x0, y0, S, S, 0, 0, N, N);
+  const img = lenCtx.getImageData(0, 0, N, N).data;
+  const br = (x, y) => { x = Math.round(x); y = Math.round(y); if (x < 0 || y < 0 || x >= N || y >= N) return null; const i = (y * N + x) * 4; return 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2]; };
+  const cx = N / 2, cy = N / 2, dx = Math.cos(ang2d), dy = Math.sin(ang2d);
+  // 雪の明るさの基準: 線に沿った画素の上位 30% の中央値
+  const vals = []; for (let t = -N / 2; t < N / 2; t += 2) { const v = br(cx + dx * t, cy + dy * t); if (v != null) vals.push(v); }
+  if (vals.length < 20) return null;
+  vals.sort((a, b) => a - b); const snow = vals[Math.floor(vals.length * 0.85)];
+  if (snow < 150) return null; // 背景が明るくない（雪面でない）場合は測らない
+  const extent = dir => {
+    let last = 0, gap = 0;
+    for (let t = 2; t < N / 2; t += 1) {
+      const v = br(cx + dx * t * dir, cy + dy * t * dir); if (v == null) break;
+      if (v < snow - 45) { last = t; gap = 0; } else if (++gap > N * 0.05) break;
+    }
+    return last;
+  };
+  const tip = extent(1), tail = extent(-1);
+  const pxLen = (tip + tail) * S / N;
+  return { pxLen, tip: tip * S / N, tail: tail * S / N };
+}
+const footLenHist = [], footRatioHist = [];
+function detectSkis(lm, world, vw, vh) {
+  const bb = bboxOf(lm), bh = bb.h * vh;
+  if (bh < 40) return null;
+  const cam = fitCamera(lm, world, vw, vh);
+  const hb = cam ? horizBasis(cam) : null;
+  const out = {};
+  // 足（かかと→つま先）の本来の長さ: これまでの中央値（3D 推定のばらつきを抑える）
+  for (const side of [0, 1]) { const h = world[29 + side], t = world[31 + side]; footLenHist.push(Math.hypot(t.x - h.x, t.y - h.y, t.z - h.z)); }
+  if (footLenHist.length > 200) footLenHist.splice(0, footLenHist.length - 200);
+  const sorted = footLenHist.slice().sort((a, b) => a - b), footLen = sorted[Math.floor(sorted.length / 2)];
+  for (const side of [0, 1]) {
+    const key = side ? 'R' : 'L', r = { foot: null, footConf: 0, line: null, lift: null, len: null, conf: 0 };
+    const heel = world[29 + side], toe = world[31 + side];
+    const zsign = toe.z - heel.z;
+    if (hb && (lm[29 + side].visibility ?? 1) > 0.4 && (lm[31 + side].visibility ?? 1) > 0.4) {
+      // 1) 足の短縮から向き
+      const dx2 = (lm[31 + side].x - lm[29 + side].x) * vw, dy2 = (lm[31 + side].y - lm[29 + side].y) * vh;
+      const L2 = Math.hypot(dx2, dy2), exp = footLen * hb.scaleH;
+      if (exp > 4) {
+        // 3D の足の長さは実際より短めに出る傾向があるので、これまでの比の上位 10% を「真横（短縮なし）」として較正する
+        const ratio = L2 / exp; footRatioHist.push(ratio); if (footRatioHist.length > 400) footRatioHist.shift();
+        const rs = footRatioHist.slice().sort((a, b) => a - b), ref = Math.max(1, rs[Math.floor(rs.length * 0.9)] || 1);
+        r.foot = yawFromForeshortening(dx2, ratio / ref, zsign, hb); r.footConf = Math.min(1, exp / 12) * Math.min(1, footRatioHist.length / 10);
+      }
+      // 2) 板の線の検出
+      const e = skiEdge2D(lm, side, vw, vh, bh);
+      if (e) {
+        r.line = { ang2d: e.ang, strength: e.strength, fx: e.fx, fy: e.fy };
+        const lineConf = Math.max(0, Math.min(1, (e.strength - 0.25) / 0.35));
+        const pref = r.foot || [toe.x - heel.x, toe.z - heel.z];
+        // 2a) カメラに俯角があれば、線の向きから 3D 向きを直接求められる
+        if (hb.pitch > 0.2) {
+          const lift = liftSki(e.ang, cam, pref);
+          if (lift) r.lift = { th: lift.th, conf: lineConf * Math.min(1, (hb.pitch - 0.2) / 0.2) * Math.min(1, lift.fore / 0.45) };
+        }
+        // 2b) 板の見かけの長さ（本来 約1.7m）から短縮角
+        if (lineConf > 0.3) {
+          const m = measureSkiLen(e.ang, e.fx, e.fy, bh);
+          const exp = 1.7 * hb.scaleH;
+          if (m && m.tip > bh * 0.12 && m.tail > bh * 0.12 && m.pxLen > exp * 0.35 && m.pxLen < exp * 1.25) {
+            const dir = yawFromForeshortening(Math.cos(e.ang) * (pref[0] * hb.e1[0] + pref[1] * hb.e1[1] >= 0 ? 1 : -1), m.pxLen / exp, zsign, hb);
+            r.len = { dir, conf: lineConf * 0.8, pxLen: m.pxLen };
+          }
+        }
+        r.conf = Math.max(r.lift ? r.lift.conf : 0, r.len ? r.len.conf : 0);
+      }
+    }
+    out[key] = r;
+  }
+  return out;
+}
+
 // 体幹と脚の主要点がある程度見えているか
 const CORE = [11,12,23,24,25,26,27,28];
 function goodPose(lm) {
@@ -492,7 +680,7 @@ function fillGaps(maxGap) {
     for (let k = i + 1; k < j; k++) {
       const u = (k - i) / (j - i);
       const mix = (P, Q) => P.map((p, n) => ({ x: p.x + (Q[n].x - p.x) * u, y: p.y + (Q[n].y - p.y) * u, z: p.z + (Q[n].z - p.z) * u, visibility: Math.min(p.visibility ?? 1, Q[n].visibility ?? 1) }));
-      frames[k].lm = mix(A.lm, B.lm); frames[k].world = mix(A.world, B.world); frames[k].src = 'interp'; filled++;
+      frames[k].lm = mix(A.lm, B.lm); frames[k].world = mix(A.world, B.world); frames[k].src = 'interp'; frames[k].ski = null; filled++;
     }
     i = j - 1;
   }
@@ -500,7 +688,8 @@ function fillGaps(maxGap) {
 }
 
 // 3フレーム移動平均（検出なしのコマは飛ばす）
-let fwdArr = [], floorArr = [];
+let fwdArr = [], floorArr = [], skiArr = [];
+window.skiDebug = () => ({ frames, skiArr, fwdArr });
 function buildSmooth() {
   // 中心重み付き5コマ窓（オフライン処理なので遅れなし）
   const W = [1, 2, 3, 2, 1];
@@ -535,6 +724,39 @@ function buildSmooth() {
     const acc = new THREE.Vector3();
     for (let k = -2; k <= 2; k++) if (raw[i + k]) acc.addScaledVector(raw[i + k], W[k + 2]);
     acc.y = 0; return acc.lengthSq() > 1e-6 ? acc.normalize() : v;
+  });
+  // 板の向き: 画像からの検出（信頼度で重み付け）＋ 足の向き ＋ 進行方向（弱い事前情報）を合成し、時間方向に平滑化
+  const rawSki = frames.map((f, i) => {
+    const w = worldSmooth[i], fwd = raw[i]; if (!w || !fwd) return null;
+    const P = w.map(toV), res = {};
+    for (const side of [0, 1]) {
+      const key = side ? 'R' : 'L';
+      const foot = P[31 + side].clone().sub(P[29 + side]); foot.y = 0;
+      if (foot.lengthSq() > 1e-6) { foot.normalize(); if (foot.dot(fwd) < 0) foot.negate(); } else foot.copy(fwd);
+      // 事前情報（進行方向）＋ 3D 足の向き（弱め）＋ 足の短縮から求めた向き ＋ 板の画像検出（俯角がある時の線の向き、板の見かけの長さ）
+      const acc = fwd.clone().multiplyScalar(0.2).addScaledVector(foot, 0.1);
+      const toThree = v => new THREE.Vector3(v[0], 0, -v[1]); // MediaPipe (x,z) → Three (x,-z)
+      const add = (v, w) => { if (!v || !(w > 0)) return; const t = toThree(v); if (t.lengthSq() < 1e-6) return; t.normalize(); if (t.dot(fwd) < -0.2) t.negate(); acc.addScaledVector(t, w); };
+      const d = f.ski && f.ski[key];
+      if (d) {
+        add(d.foot, 0.6 * d.footConf);
+        if (d.lift) add([Math.cos(d.lift.th), Math.sin(d.lift.th)], 1.0 * d.lift.conf);
+        if (d.len) add(d.len.dir, 0.5 * d.len.conf);
+      }
+      res[key + 'img'] = d ? d.conf : 0;
+      res[key] = acc.normalize();
+    }
+    return res;
+  });
+  skiArr = rawSki.map((r, i) => {
+    if (!r) return null;
+    const out = { Limg: r.Limg, Rimg: r.Rimg };
+    for (const key of ['L', 'R']) {
+      const acc = new THREE.Vector3();
+      for (let k = -2; k <= 2; k++) if (rawSki[i + k]) acc.addScaledVector(rawSki[i + k][key], W[k + 2]);
+      out[key] = acc.lengthSq() > 1e-6 ? acc.normalize() : r[key];
+    }
+    return out;
   });
   // 地面の高さ: 各コマの足の最下点を ±5 コマの中央値で安定化
   const fl = worldSmooth.map(w => { if (!w) return null; let m = Infinity; for (let k = 27; k <= 32; k++) m = Math.min(m, -w[k].y); return m; });
@@ -576,6 +798,17 @@ function drawOverlay() {
   }
   octx.fillStyle = 'white';
   for (let i = 11; i < 33; i++) { if (P[i][2] < 0.3) continue; octx.beginPath(); octx.arc(P[i][0], P[i][1], 3.5 * devicePixelRatio * k, 0, Math.PI * 2); octx.fill(); }
+  // 画像から検出した板の向き（足元を通る線）。薄い線は検出できず足の向きで代用
+  if (show.ski && f.ski) {
+    const sx = W / video.videoWidth, sy = H / video.videoHeight;
+    for (const key of ['L', 'R']) {
+      const d = f.ski[key]; if (!d || !d.line) continue;
+      const ln = d.line, L = bb.h * H * 0.45, dx = Math.cos(ln.ang2d) * L, dy = Math.sin(ln.ang2d) * L;
+      octx.strokeStyle = key === 'L' ? 'rgba(245,158,11,.95)' : 'rgba(56,189,248,.95)';
+      octx.lineWidth = (d.conf > 0.05 ? 5 : 2) * devicePixelRatio * k;
+      octx.beginPath(); octx.moveTo(ln.fx * sx - dx, ln.fy * sy - dy); octx.lineTo(ln.fx * sx + dx, ln.fy * sy + dy); octx.stroke();
+    }
+  }
   // 2D 重心（画像座標で簡易表示）
   const cog2 = cogOf(f.lm.map(p => ({ x: p.x * W, y: p.y * H, z: 0 })));
   if (cog2 && show.cog) {
@@ -643,8 +876,16 @@ function poseData(i) {
   const d = cog.clone().sub(feet); d.y = 0;
   const ang = (A,B,C) => { const u=A.clone().sub(B), v=C.clone().sub(B); return THREE.MathUtils.radToDeg(u.angleTo(v)); };
   const line = cog.clone().sub(feet);
+  // 板の向き（検出結果があればそれ、なければ足の向き）。傾き補正時も同じ回転を適用
+  const sk = skiArr[i];
+  const skiDir = key => { let v; if (sk) v = sk[key].clone(); else { const a = key === 'L' ? [29, 31] : [30, 32]; v = P[a[1]].clone().sub(P[a[0]]); v.y = 0; if (v.lengthSq() < 1e-6 || v.dot(fwd) < 0) v = fwd.clone(); }
+    if (sk && (tilt.pitch || tilt.roll)) { /* 水平面内の向きは補正の影響が小さいので省略 */ } v.y = 0; return v.normalize(); };
+  const skiL = skiDir('L'), skiR = skiDir('R');
+  const yaw = v => THREE.MathUtils.radToDeg(Math.atan2(v.dot(right), v.dot(fwd)));
+  const skiYawL = yaw(skiL), skiYawR = yaw(skiR);
   return {
-    P, cog, feet, fwd, right, floor,
+    P, cog, feet, fwd, right, floor, skiL, skiR, skiConf: sk ? [sk.Limg, sk.Rimg] : [0, 0],
+    skiYawL, skiYawR, skiOpen: skiYawL - skiYawR,                // 板の向き（進行方向比、右向きが正）と開き（正=つま先が閉じるA字）
     cogFwd: d.dot(fwd)*100, cogLat: d.dot(right)*100,         // cm, 前と右が正
     lean: inPlane(line, right),                                // 内傾角: 右へ傾くと正
     trunkFwd: inPlane(trunk, fwd),                             // 前傾角
@@ -730,9 +971,7 @@ function setCyl(mesh, a, b, rad) {
   mesh.scale.set(rad, Math.max(len, 1e-4), rad);
   mesh.quaternion.setFromUnitVectors(UP, d.normalize());
 }
-function placeSki(mesh, ankle, heel, toe, fwd) {
-  let dir = toe.clone().sub(heel); dir.y = 0;
-  if (dir.lengthSq() < 1e-6) dir = fwd.clone(); dir.normalize();
+function placeSki(mesh, ankle, dir) {
   const center = ankle.clone(); center.y = .006; center.addScaledVector(dir, .15); // ビンディングは板の中心やや後ろ
   mesh.position.copy(center);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), dir);
@@ -762,7 +1001,9 @@ function update3D() {
   fig.feet.position.set(feet.x, .003, feet.z);
   fig.fwdArrow.position.set(feet.x, .01, feet.z); fig.fwdArrow.setDirection(fwd);
   fig.skiL.visible = fig.skiR.visible = show.ski;
-  placeSki(fig.skiL, P[27], P[29], P[31], fwd); placeSki(fig.skiR, P[28], P[30], P[32], fwd);
+  placeSki(fig.skiL, P[27], d.skiL); placeSki(fig.skiR, P[28], d.skiR);
+  fig.skiL.material.opacity = (fig._op ?? 1) * (d.skiConf[0] > 0.05 ? .9 : .45);
+  fig.skiR.material.opacity = (fig._op ?? 1) * (d.skiConf[1] > 0.05 ? .9 : .45);
   if (show.trail) {
     const last = trailPts[trailPts.length-1];
     if (!last || last.i !== idx) { trailPts.push({ i:idx, p:cog.clone() }); if (trailPts.length > 150) trailPts.shift(); trailLine.geometry.setFromPoints(trailPts.map(o => o.p)); }
@@ -779,6 +1020,9 @@ const METRICS = [
   { k:'膝 左', f:d => d.kneeL, u:'°', s:() => '180°で伸びきり', d:'股関節-膝-足首' },
   { k:'膝 右', f:d => d.kneeR, u:'°', s:() => '180°で伸びきり', d:'股関節-膝-足首' },
   { k:'腰の高さ', f:d => d.hipH, u:'cm', s:() => '足元から', d:'低いほど沈み込み' },
+  { k:'板の向き 左', f:d => d.skiYawL, u:'°', s:v => Math.abs(v) < 5 ? '進行方向どおり' : (v > 0 ? '右を向く' : '左を向く'), d:'進行方向（骨盤）に対する角', src:d => d.skiConf[0] > 0.05 ? '板を画像で検出' : '足の向きから推定' },
+  { k:'板の向き 右', f:d => d.skiYawR, u:'°', s:v => Math.abs(v) < 5 ? '進行方向どおり' : (v > 0 ? '右を向く' : '左を向く'), d:'進行方向（骨盤）に対する角', src:d => d.skiConf[1] > 0.05 ? '板を画像で検出' : '足の向きから推定' },
+  { k:'板の開き', f:d => d.skiOpen, u:'°', s:v => Math.abs(v) < 6 ? 'ほぼ平行' : (v > 0 ? 'つま先が閉じる（A字）' : 'つま先が開く（V字）'), d:'左右の板の向きの差' },
 ];
 const metricsEl = $('metrics');
 metricsEl.innerHTML = METRICS.map((m,i) => `<div class="metric"><div class="k">${m.k}</div><div class="v"><span id="mv${i}">–</span><span class="u">${m.u}</span></div><div class="d" id="md${i}">${m.d}</div></div>`).join('');
@@ -787,7 +1031,7 @@ function updateMetrics() {
   METRICS.forEach((m,i) => {
     const v = d ? m.f(d) : null;
     $('mv'+i).textContent = v == null ? '–' : (Math.abs(v) < 100 ? v.toFixed(1) : Math.round(v));
-    $('md'+i).textContent = v == null ? '検出なし' : `${m.s(v)}　${m.d}`;
+    $('md'+i).textContent = v == null ? '検出なし' : `${m.s(v)}　${m.src ? m.src(d) : m.d}`;
   });
 }
 
