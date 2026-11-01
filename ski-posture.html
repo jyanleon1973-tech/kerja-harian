@@ -37,6 +37,9 @@
   .videowrap { position:relative; width:100%; }
   video { display:block; width:100%; height:auto; background:#000; }
   #overlay { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
+  .videowrap.pick { cursor:crosshair; }
+  .videowrap.pick::after { content:'解析したい人をタップ'; position:absolute; left:50%; bottom:10px; transform:translateX(-50%); background:rgba(234,179,8,.9); color:#1F2937; font-size:12px; font-weight:700; padding:4px 10px; border-radius:8px; pointer-events:none; }
+
   #three { width:100%; aspect-ratio:4/3; touch-action:none; overflow:hidden; }
   #three canvas { display:block; }
   @media (min-width:900px) { #three { aspect-ratio:1/1; } }
@@ -109,11 +112,20 @@
           <option value="60">最初の60秒</option>
         </select>
       </label>
+      <label class="lbl">検出感度
+        <select id="sens">
+          <option value="0.5">標準</option>
+          <option value="0.3" selected>高（小さく映る人向け）</option>
+          <option value="0.15">最高（誤検出が増えることも）</option>
+        </select>
+      </label>
       <button id="btnAnalyze" class="primary" disabled>解析開始</button>
+      <button id="btnPick" class="hidden">対象をタップで指定</button>
       <button id="btnAbort" class="danger hidden">中止</button>
     </div>
     <div class="bar"><div id="prog"></div></div>
     <div class="status" id="status">動画を選んでください。1人が大きく映っている横または斜め前からの固定カメラ映像が最も精度が出ます。</div>
+    <div class="status" id="targetHint"></div>
   </section>
 
   <section id="viewer" class="hidden">
@@ -123,11 +135,12 @@
           <video id="video" playsinline muted preload="auto"></video>
           <canvas id="overlay"></canvas>
         </div>
-        <div class="tag">元動画 + 検出骨格</div>
+        <div class="tag" id="videoTag">元動画 + 検出骨格</div>
       </div>
-      <div class="pane">
+      <div class="pane" id="threePane">
         <div id="three"></div>
         <div class="tag">3D（ドラッグで回転 / ピンチで拡大）</div>
+        <div class="tag" id="detTag" style="left:auto;right:8px;top:auto;bottom:40px"></div>
         <div class="viewbtns">
           <button data-view="cam">カメラ</button>
           <button data-view="side">横</button>
@@ -144,7 +157,7 @@
       </div>
     </div>
 
-    <div class="card controls" style="margin-top:12px">
+    <div class="card controls ao" style="margin-top:12px">
       <input type="range" id="slider" min="0" max="0" value="0" step="1">
       <div class="time" id="time">0.00 s / 0.00 s　(0 / 0)</div>
       <div class="transport">
@@ -162,9 +175,17 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card ao">
       <h2>姿勢データ（このコマ）</h2>
       <div class="metrics" id="metrics"></div>
+      <div class="row" style="margin-top:10px; gap:16px">
+        <label class="lbl" style="flex:1; min-width:220px">カメラの上下の傾き補正 <span id="pitchV">0</span>°
+          <input type="range" id="pitch" min="-25" max="25" step="0.5" value="0" style="margin-top:4px">
+        </label>
+        <label class="lbl" style="flex:1; min-width:220px">カメラの左右の傾き補正 <span id="rollV">0</span>°
+          <input type="range" id="roll" min="-25" max="25" step="0.5" value="0" style="margin-top:4px">
+        </label>
+      </div>
       <div class="legend">
         <span><i style="background:#EF4444"></i>重心（赤）と垂線</span>
         <span><i style="background:#22C55E"></i>両足の中心（緑）</span>
@@ -172,9 +193,10 @@
         <span><i style="background:#38BDF8"></i>右足・板</span>
       </div>
       <p class="note" style="margin:10px 0 0">
-        重心は関節位置と標準的な人体部位の質量比（de Leva）から推定した「姿勢上の重心」です。板への実際の荷重ではありません。
-        板の向きはかかとからつま先の向きで代用した推定値です。1台のカメラからの奥行きは近似のため、角度は数度の誤差を含みます。
-        撮影条件は、固定カメラ・真横または斜め前・人物が画面の1/3以上の大きさが目安です。
+        重心は関節位置と人体部位の質量比（de Leva 1996）から推定した「姿勢上の重心」です。板への実際の荷重ではありません。
+        前後・左右の基準はスキーヤーの骨盤の向きから求めた進行方向です。板の向きはかかととつま先の向きで代用した推定値です。
+        鉛直の基準はカメラの上下方向なので、斜面を見上げ・見下ろして撮った映像では前傾角に、カメラが傾いていれば内傾角にその分が足されます。上のスライダーで補正できます。
+        1台のカメラからの奥行きは近似のため、角度は数度の誤差を含みます。撮影条件は、固定カメラ・真横または斜め前・人物が画面の1/3以上の大きさが目安です。
       </p>
     </div>
   </section>
@@ -191,10 +213,14 @@ const statusEl = $('status'), progEl = $('prog');
 
 // ---------- 状態 ----------
 let landmarker = null, landmarkerModel = null;
-let frames = [];          // {t, lm (2D正規化), world (3D m)}
+let frames = [];          // {t, lm (2D正規化), world (3D m), src: 'det'|'interp'|null}
 let worldSmooth = [];     // 平滑化した world
 let idx = -1, playing = false, abortFlag = false;
-let lastTs = 0; // detectForVideo のタイムスタンプは単調増加が必要（再解析時も）
+let analyzed = false;     // 解析済みか
+let pickMode = false;     // 動画をタップして対象の人を指定するモード
+let running = false;      // 解析ループ実行中
+let target = null;        // 解析対象の人の位置 {x,y} (0-1)
+let landmarkerSens = null;
 const show = { cog:true, ski:true, trail:false, smooth:true };
 
 // ---------- MediaPipe 設定 ----------
@@ -203,19 +229,19 @@ const MODEL_URL = {
   full:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task',
   heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task',
 };
-async function getLandmarker(model) {
-  if (landmarker && landmarkerModel === model) return landmarker;
+async function getLandmarker(model, sens) {
+  if (landmarker && landmarkerModel === model && landmarkerSens === sens) return landmarker;
   if (landmarker) { landmarker.close(); landmarker = null; }
   setStatus('AIモデルを読み込み中…（初回は数MBのダウンロードがあります）');
   const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
   const make = delegate => PoseLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: MODEL_URL[model], delegate },
-    runningMode: 'VIDEO', numPoses: 1,
-    minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+    runningMode: 'IMAGE', numPoses: 1,
+    minPoseDetectionConfidence: sens, minPosePresenceConfidence: sens, minTrackingConfidence: sens,
   });
   try { landmarker = await make('GPU'); }
   catch (e) { console.warn('GPU delegate failed, fallback to CPU', e); landmarker = await make('CPU'); }
-  landmarkerModel = model;
+  landmarkerModel = model; landmarkerSens = sens;
   return landmarker;
 }
 
@@ -227,11 +253,19 @@ $('file').addEventListener('change', e => {
   objectUrl = URL.createObjectURL(f);
   $('fileName').textContent = f.name;
   video.src = objectUrl;
-  frames = []; worldSmooth = []; idx = -1;
-  $('viewer').classList.add('hidden'); $('btnExport').classList.add('hidden');
+  frames = []; worldSmooth = []; idx = -1; analyzed = false; target = null;
+  $('viewer').classList.remove('hidden'); $('threePane').classList.add('hidden');
+  document.querySelectorAll('.ao').forEach(el => el.classList.add('hidden'));
+  $('btnExport').classList.add('hidden');
+  setPick(true); $('btnPick').classList.remove('hidden');
+  $('videoTag').textContent = '元動画';
   video.addEventListener('loadedmetadata', () => {
+    if (!isFinite(video.duration)) { // 一部の録画は長さが未確定。末尾へシークすると確定する
+      video.currentTime = 1e6;
+      video.addEventListener('durationchange', () => { video.currentTime = 0; }, { once: true });
+    }
     $('btnAnalyze').disabled = false;
-    setStatus(`読み込み完了: ${video.videoWidth}×${video.videoHeight}, ${video.duration.toFixed(1)} 秒。「解析開始」を押してください。`);
+    setStatus(`読み込み完了: ${video.videoWidth}×${video.videoHeight}, ${video.duration.toFixed(1)} 秒。人が小さく映っている・複数人いる場合は、動画の中の解析したい人をタップしてから「解析開始」を押してください。`);
     resizeOverlay();
   }, { once: true });
   video.addEventListener('error', () => setStatus('この動画はブラウザで再生できない形式です。別の形式（MP4/MOV）をお試しください。', true));
@@ -239,56 +273,128 @@ $('file').addEventListener('change', e => {
 
 function setStatus(msg, warn=false) { statusEl.textContent = msg; statusEl.classList.toggle('warn', warn); }
 
+// 動画をタップして対象の人を指定（複数人・小さく映る場合に有効）。解析後もやり直せる
+function setPick(on) {
+  pickMode = on;
+  document.querySelector('.videowrap').classList.toggle('pick', on);
+  $('btnPick').classList.toggle('active', on);
+  drawOverlay();
+}
+$('btnPick').addEventListener('click', () => { pause(); setPick(!pickMode); });
+document.querySelector('.videowrap').addEventListener('click', e => {
+  if (!pickMode || running || !video.videoWidth) return;
+  const r = video.getBoundingClientRect();
+  target = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  $('targetHint').textContent = '対象を指定しました（黄色の印）。別の場所をタップすると変更できます。この位置から追跡を始めます。';
+  drawOverlay();
+});
+
 function seekTo(t) {
   return new Promise(res => {
     if (Math.abs(video.currentTime - t) < 0.0005) return res();
-    const h = () => { video.removeEventListener('seeked', h); res(); };
+    let done = false;
+    const finish = () => { if (done) return; done = true; video.removeEventListener('seeked', h); clearTimeout(tm); res(); };
+    // seeked の後、描画を2回待ってから進む（新しいフレームが確実に取れるように）。seeked が来なければ 3 秒で打ち切り
+    const h = () => requestAnimationFrame(() => requestAnimationFrame(finish));
+    const tm = setTimeout(finish, 3000);
     video.addEventListener('seeked', h);
     video.currentTime = t;
   });
 }
-const nextPaint = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+const nextPaint = () => new Promise(r => requestAnimationFrame(r));
 
 // ---------- 解析 ----------
 $('btnAnalyze').addEventListener('click', analyze);
 $('btnAbort').addEventListener('click', () => { abortFlag = true; });
 
 async function analyze() {
-  abortFlag = false;
+  if (running) return;
+  running = true; abortFlag = false; pause();
   $('btnAnalyze').disabled = true; $('btnAbort').classList.remove('hidden');
-  $('file').disabled = true;
+  $('file').disabled = true; $('btnPick').disabled = true;
+  setPick(false);
   try {
-    const lm = await getLandmarker($('model').value);
+    const lm = await getLandmarker($('model').value, +$('sens').value);
     const fps = +$('fps').value, dt = 1 / fps;
     const rangeV = $('range').value;
     const end = rangeV === 'all' ? video.duration : Math.min(video.duration, +rangeV);
     const total = Math.floor(end / dt);
     video.pause();
-    frames = [];
-    const t0 = performance.now(), tsBase = lastTs + 1;
+    frames = []; worldSmooth = []; fwdArr = []; floorArr = []; trailPts = []; analyzed = false;
+    if (trailLine) trailLine.geometry.setFromPoints([]);
+    const vw = video.videoWidth, vh = video.videoHeight;
+    // 追跡用の切り出し領域（ピクセル）。人が小さく映っていても拡大して検出できるようにする
+    let roi = target ? { cx: target.x * vw, cy: target.y * vh, size: Math.max(vh * 0.5, 256) } : null;
+    let prevCenter = null, lostCount = 0, lastGood = null, lastGoodIdx = -1, lastSize = 0;
+    const boneHist = []; // 骨の長さの履歴（体型と合わない誤検出を捨てる）
+    const t0 = performance.now();
     for (let i = 0; i < total; i++) {
       if (abortFlag) break;
       const t = i * dt;
       await seekTo(t);
       await nextPaint();
-      let r;
-      const ts = tsBase + Math.round(t * 1000); lastTs = ts;
-      try { r = lm.detectForVideo(video, ts); }
-      catch (e) { console.warn(e); r = null; }
-      frames.push({ t, lm: r && r.landmarks[0] || null, world: r && r.worldLandmarks[0] || null });
+      let det = null;
+      try {
+        det = roi ? detectIn(lm, roi, vw, vh) : null;
+        if (!det || !goodPose(det.lm)) {
+          // 切り出しで見つからなければ全体で探す
+          const full = detectIn(lm, null, vw, vh);
+          det = full && goodPose(full.lm) ? full : null;
+        }
+        // 位置の手がかりがある時は3コマに1回、全く無い時は重いので6コマに1回
+        if (!det && (i === 0 || (prevCenter || target ? lostCount % 3 === 2 : lostCount % 6 === 5))) {
+          // それでも見つからなければ画面を分割して拡大探索（小さく映る人向け。重いので3コマに1回）
+          // 直前の位置が分かればその近くを優先、分からなければタップ位置、それもなければ全体
+          const near = prevCenter ? { x: prevCenter.x / vw, y: prevCenter.y / vh } : (lastGood ? null : target);
+          det = gridSearch(lm, vw, vh, near, lastSize);
+        }
+      } catch (e) { console.warn(e); det = null; }
+      // 直前の位置から体格に比べて飛びすぎた検出は別人の可能性があるので捨てる（経過コマ数に応じて許容を広げる）
+      if (det && lastGood) {
+        const gap = i - lastGoodIdx;
+        if (gap <= fps) {
+          const c = bboxOf(det.lm), pc = bboxOf(lastGood);
+          const body = Math.max(pc.w, pc.h, 0.05);
+          const jump = Math.hypot(c.cx - pc.cx, c.cy - pc.cy);
+          if (jump > body * (0.6 + 0.4 * gap)) det = null;
+        }
+      }
+      // 骨の長さが今までの中央値と大きく違う検出（別人や崩れた推定）は捨てる
+      if (det && !boneOk(det.world, boneHist)) det = null;
+      if (det) {
+        frames.push({ t, lm: det.lm, world: det.world, src: 'det' });
+        pushBones(det.world, boneHist);
+        const b = bboxOf(det.lm);
+        const size = Math.max(b.w * vw, b.h * vh) * 1.6;
+        let cx = b.cx * vw, cy = b.cy * vh;
+        if (prevCenter) { const g = Math.max(1, i - lastGoodIdx); cx += (cx - prevCenter.x) / g * 0.7; cy += (cy - prevCenter.y) / g * 0.7; } // 動きを先読み
+        prevCenter = { x: b.cx * vw, y: b.cy * vh };
+        roi = { cx, cy, size: Math.max(size, 128) };
+        lostCount = 0; lastGood = det.lm; lastGoodIdx = i; lastSize = Math.max(b.w * vw, b.h * vh);
+      } else {
+        frames.push({ t, lm: null, world: null, src: null });
+        lostCount++;
+        if (roi && lostCount >= 2) roi = { cx: roi.cx, cy: roi.cy, size: roi.size * 1.6 }; // 見失ったら範囲を広げる
+        if (lostCount >= 6) roi = null;
+      }
       if (i % 2 === 0) {
         const el = (performance.now() - t0) / 1000, eta = el / (i + 1) * (total - i - 1);
         progEl.style.width = (100 * (i + 1) / total).toFixed(1) + '%';
         setStatus(`解析中 ${i + 1} / ${total} コマ　残り約 ${Math.ceil(eta)} 秒`);
       }
     }
-    const detected = frames.filter(f => f.world).length;
     if (!frames.length) { setStatus('解析できませんでした。', true); return; }
+    const detected = frames.filter(f => f.src === 'det').length;
+    const filled = fillGaps(Math.max(2, Math.round(fps * 0.5)));
     buildSmooth();
+    analyzed = true;
     progEl.style.width = '100%';
-    setStatus(`解析完了: ${frames.length} コマ中 ${detected} コマで人物を検出${abortFlag ? '（途中で中止）' : ''}。`,
+    setStatus(`解析完了: ${frames.length} コマ中 ${detected} コマで検出、${filled} コマを前後から補間${abortFlag ? '（途中で中止）' : ''}。` +
+      (detected < frames.length * 0.5 ? ' 検出率が低めです。動画の中の人をタップして対象を指定する、検出感度を上げる、人が大きく映る動画（ズーム撮影やトリミング）を使う、を試してください。' : ''),
       detected < frames.length * 0.5);
-    $('viewer').classList.remove('hidden'); $('btnExport').classList.remove('hidden');
+    $('threePane').classList.remove('hidden'); $('btnExport').classList.remove('hidden');
+    document.querySelectorAll('.ao').forEach(el => el.classList.remove('hidden'));
+    $('videoTag').textContent = '元動画 + 検出骨格';
     $('slider').max = frames.length - 1;
     initThree();
     resizeOverlay();
@@ -299,20 +405,143 @@ async function analyze() {
     console.error(e);
     setStatus('エラー: ' + (e && e.message || e), true);
   } finally {
-    $('btnAnalyze').disabled = false; $('btnAbort').classList.add('hidden'); $('file').disabled = false;
+    running = false;
+    $('btnAnalyze').disabled = false; $('btnAbort').classList.add('hidden'); $('file').disabled = false; $('btnPick').disabled = false;
+    if (!analyzed) setPick(true);
   }
 }
 
+// 切り出し検出。roi があればその正方形領域を 512px に拡大して検出し、座標を元画像の正規化座標に戻す
+const work = document.createElement('canvas'); work.width = work.height = 512;
+const wctx = work.getContext('2d');
+function detectIn(lm, roi, vw, vh) {
+  if (!roi) {
+    const r = lm.detect(video);
+    return r.landmarks[0] ? { lm: r.landmarks[0], world: r.worldLandmarks[0] } : null;
+  }
+  const size = Math.min(roi.size, vw, vh);
+  const x0 = Math.max(0, Math.min(vw - size, roi.cx - size / 2));
+  const y0 = Math.max(0, Math.min(vh - size, roi.cy - size / 2));
+  wctx.drawImage(video, x0, y0, size, size, 0, 0, 512, 512);
+  const r = lm.detect(work);
+  if (!r.landmarks[0]) return null;
+  const mapped = r.landmarks[0].map(p => ({ x: (x0 + p.x * size) / vw, y: (y0 + p.y * size) / vh, z: p.z, visibility: p.visibility }));
+  return { lm: mapped, world: r.worldLandmarks[0] };
+}
+// 画面をタイル状に切り出して探索。target があればその近くから順に試す
+function gridSearch(lm, vw, vh, near, lastSize) {
+  const m = Math.min(vw, vh);
+  // 探索する切り出しサイズ。直前の体格が分かればそれに合わせ、なければ大→小
+  const scales = lastSize ? [lastSize * 2.2, lastSize * 1.5, lastSize * 3.5] : (near ? [0.5, 0.3, 0.18].map(x => x * m) : [0.5, 0.3].map(x => x * m));
+  let best = null, bestScore = -Infinity;
+  for (const sz of scales) {
+    const size = Math.max(Math.min(sz, m), 128), step = size * 0.6;
+    let tiles = [];
+    for (let y = size / 2; y < vh + step / 2; y += step) for (let x = size / 2; x < vw + step / 2; x += step)
+      tiles.push({ cx: Math.min(x, vw - size / 2), cy: Math.min(y, vh - size / 2), size });
+    if (near) {
+      const nx = near.x * vw, ny = near.y * vh;
+      tiles.sort((a, b) => Math.hypot(a.cx - nx, a.cy - ny) - Math.hypot(b.cx - nx, b.cy - ny));
+      tiles = tiles.slice(0, 6); // 近い6タイルだけ
+    }
+    for (const tl of tiles) {
+      const d = detectIn(lm, tl, vw, vh);
+      if (!d || !goodPose(d.lm)) continue;
+      const b = bboxOf(d.lm);
+      let sc = CORE.reduce((a, k) => a + (d.lm[k].visibility ?? 1), 0) / CORE.length;
+      if (near) sc -= Math.hypot(b.cx - near.x, b.cy - near.y) * 1.5; // 近いほど優先
+      if (sc > bestScore) { best = d; bestScore = sc; }
+    }
+    if (best && near) break; // 位置が分かっている場合は見つかった段階で終了
+  }
+  return best;
+}
+// 主要な骨の長さ（world 座標, m）。履歴の中央値から 35% 以上ずれる骨が2本以上なら不採用
+const BONE_CHECK = [[11,13],[12,14],[11,23],[12,24],[23,25],[24,26],[25,27],[26,28]];
+const boneLens = w => BONE_CHECK.map(([a, b]) => Math.hypot(w[a].x - w[b].x, w[a].y - w[b].y, w[a].z - w[b].z));
+function pushBones(w, hist) { hist.push(boneLens(w)); if (hist.length > 45) hist.shift(); }
+function boneOk(w, hist) {
+  if (!w || hist.length < 8) return true;
+  const L = boneLens(w); let bad = 0;
+  for (let k = 0; k < L.length; k++) {
+    const col = hist.map(h => h[k]).sort((a, b) => a - b), med = col[Math.floor(col.length / 2)];
+    if (med > 0 && Math.abs(L[k] - med) / med > 0.35) bad++;
+  }
+  return bad < 2;
+}
+// 体幹と脚の主要点がある程度見えているか
+const CORE = [11,12,23,24,25,26,27,28];
+function goodPose(lm) {
+  let v = 0; for (const i of CORE) v += lm[i].visibility ?? 1;
+  return v / CORE.length > 0.35;
+}
+function bboxOf(lm) {
+  let x0=1,y0=1,x1=0,y1=0;
+  for (let i = 0; i < 33; i++) { const p = lm[i]; if ((p.visibility ?? 1) < 0.3) continue; x0=Math.min(x0,p.x); y0=Math.min(y0,p.y); x1=Math.max(x1,p.x); y1=Math.max(y1,p.y); }
+  if (x1 <= x0) { x0=0;y0=0;x1=1;y1=1; }
+  return { cx:(x0+x1)/2, cy:(y0+y1)/2, w:x1-x0, h:y1-y0 };
+}
+// 短い欠落を前後の検出から線形補間
+function fillGaps(maxGap) {
+  let filled = 0;
+  for (let i = 0; i < frames.length; i++) {
+    if (frames[i].src !== 'det') continue;
+    let j = i + 1; while (j < frames.length && frames[j].src !== 'det') j++;
+    if (j >= frames.length || j - i <= 1 || j - i - 1 > maxGap) { i = j - 1; continue; }
+    const A = frames[i], B = frames[j];
+    for (let k = i + 1; k < j; k++) {
+      const u = (k - i) / (j - i);
+      const mix = (P, Q) => P.map((p, n) => ({ x: p.x + (Q[n].x - p.x) * u, y: p.y + (Q[n].y - p.y) * u, z: p.z + (Q[n].z - p.z) * u, visibility: Math.min(p.visibility ?? 1, Q[n].visibility ?? 1) }));
+      frames[k].lm = mix(A.lm, B.lm); frames[k].world = mix(A.world, B.world); frames[k].src = 'interp'; filled++;
+    }
+    i = j - 1;
+  }
+  return filled;
+}
+
 // 3フレーム移動平均（検出なしのコマは飛ばす）
+let fwdArr = [], floorArr = [];
 function buildSmooth() {
+  // 中心重み付き5コマ窓（オフライン処理なので遅れなし）
+  const W = [1, 2, 3, 2, 1];
   worldSmooth = frames.map((f, i) => {
     if (!f.world) return null;
-    const nb = [frames[i - 1], f, frames[i + 1]].filter(x => x && x.world).map(x => x.world);
     return f.world.map((p, j) => {
-      let x = 0, y = 0, z = 0;
-      for (const w of nb) { x += w[j].x; y += w[j].y; z += w[j].z; }
-      return { x: x / nb.length, y: y / nb.length, z: z / nb.length, visibility: p.visibility };
+      let x = 0, y = 0, z = 0, wsum = 0;
+      for (let k = -2; k <= 2; k++) {
+        const g = frames[i + k]; if (!g || !g.world) continue;
+        const w = W[k + 2]; x += g.world[j].x * w; y += g.world[j].y * w; z += g.world[j].z * w; wsum += w;
+      }
+      return { x: x / wsum, y: y / wsum, z: z / wsum, visibility: p.visibility };
     });
+  });
+  // 進行方向: 骨盤の向き（左腰→右腰）から求め、かかと→つま先で前後を確認。前のコマと180°近く違えば反転扱い。最後に時間方向に平滑化
+  const raw = frames.map((f, i) => {
+    const w = worldSmooth[i]; if (!w) return null;
+    const P = w.map(toV);
+    const right = P[24].clone().sub(P[23]); right.y = 0;
+    let fwd = new THREE.Vector3().crossVectors(UP, right); // 右手系: 上 × 右 = 前
+    const toe = P[31].clone().sub(P[29]).add(P[32]).sub(P[30]); toe.y = 0;
+    if (fwd.lengthSq() < 1e-6) fwd = toe.clone();
+    if (fwd.lengthSq() < 1e-6) return new THREE.Vector3(0, 0, -1);
+    fwd.normalize();
+    if (toe.lengthSq() > 1e-4 && fwd.dot(toe.normalize()) < -0.5) fwd.negate(); // 骨盤の左右が入れ替わって検出された場合に足の向きで補正
+    return fwd;
+  });
+  let prev = null;
+  for (let i = 0; i < raw.length; i++) { if (!raw[i]) continue; if (prev && raw[i].dot(prev) < 0) raw[i].negate(); prev = raw[i]; }
+  fwdArr = raw.map((v, i) => {
+    if (!v) return null;
+    const acc = new THREE.Vector3();
+    for (let k = -2; k <= 2; k++) if (raw[i + k]) acc.addScaledVector(raw[i + k], W[k + 2]);
+    acc.y = 0; return acc.lengthSq() > 1e-6 ? acc.normalize() : v;
+  });
+  // 地面の高さ: 各コマの足の最下点を ±5 コマの中央値で安定化
+  const fl = worldSmooth.map(w => { if (!w) return null; let m = Infinity; for (let k = 27; k <= 32; k++) m = Math.min(m, -w[k].y); return m; });
+  floorArr = fl.map((v, i) => {
+    if (v == null) return null;
+    const win = []; for (let k = -5; k <= 5; k++) if (fl[i + k] != null) win.push(fl[i + k]);
+    win.sort((a, b) => a - b); return win[Math.floor(win.length / 2)];
   });
 }
 
@@ -327,9 +556,18 @@ window.addEventListener('resize', () => { resizeOverlay(); resizeThree(); });
 function drawOverlay() {
   const W = overlay.width, H = overlay.height;
   octx.clearRect(0, 0, W, H);
+  if (pickMode && target) {
+    octx.strokeStyle = '#FACC15'; octx.lineWidth = 3 * devicePixelRatio;
+    octx.beginPath(); octx.arc(target.x * W, target.y * H, 18 * devicePixelRatio, 0, Math.PI * 2); octx.stroke();
+    octx.beginPath(); octx.arc(target.x * W, target.y * H, 3 * devicePixelRatio, 0, Math.PI * 2); octx.fillStyle = '#FACC15'; octx.fill();
+  }
+  if (!analyzed) return;
   const f = frames[idx]; if (!f || !f.lm) return;
+  octx.globalAlpha = f.src === 'interp' ? 0.5 : 1;
   const P = f.lm.map(p => [p.x * W, p.y * H, p.visibility ?? 1]);
-  octx.lineWidth = 3 * devicePixelRatio; octx.lineCap = 'round';
+  // 人物が小さく映っている時は線と点も小さくする
+  const bb = bboxOf(f.lm), k = Math.max(0.3, Math.min(1, bb.h * H / (320 * devicePixelRatio)));
+  octx.lineWidth = 3 * devicePixelRatio * k; octx.lineCap = 'round';
   for (const [a, b] of CONN) {
     if (P[a][2] < 0.3 || P[b][2] < 0.3) continue;
     const left = (a % 2 === 1);
@@ -337,26 +575,28 @@ function drawOverlay() {
     octx.beginPath(); octx.moveTo(P[a][0], P[a][1]); octx.lineTo(P[b][0], P[b][1]); octx.stroke();
   }
   octx.fillStyle = 'white';
-  for (let i = 11; i < 33; i++) { if (P[i][2] < 0.3) continue; octx.beginPath(); octx.arc(P[i][0], P[i][1], 3.5 * devicePixelRatio, 0, Math.PI * 2); octx.fill(); }
+  for (let i = 11; i < 33; i++) { if (P[i][2] < 0.3) continue; octx.beginPath(); octx.arc(P[i][0], P[i][1], 3.5 * devicePixelRatio * k, 0, Math.PI * 2); octx.fill(); }
   // 2D 重心（画像座標で簡易表示）
   const cog2 = cogOf(f.lm.map(p => ({ x: p.x * W, y: p.y * H, z: 0 })));
   if (cog2 && show.cog) {
-    octx.fillStyle = '#EF4444'; octx.beginPath(); octx.arc(cog2.x, cog2.y, 7 * devicePixelRatio, 0, Math.PI * 2); octx.fill();
+    octx.fillStyle = '#EF4444'; octx.beginPath(); octx.arc(cog2.x, cog2.y, 7 * devicePixelRatio * k, 0, Math.PI * 2); octx.fill();
     octx.strokeStyle = 'rgba(239,68,68,.8)'; octx.setLineDash([6 * devicePixelRatio, 6 * devicePixelRatio]);
     octx.beginPath(); octx.moveTo(cog2.x, cog2.y); octx.lineTo(cog2.x, H); octx.stroke(); octx.setLineDash([]);
   }
+  octx.globalAlpha = 1;
 }
 
 // ---------- 重心 (de Leva 部位質量比) ----------
+// de Leva (1996) 成人男性の部位質量比と、近位端からの重心位置比。合計 1.000
 const SEG = [
-  { m:0.081,  a:[7,8],   b:[7,8],   f:0.5 },    // 頭 (耳の中点)
-  { m:0.497,  a:[11,12], b:[23,24], f:0.5 },    // 体幹
-  { m:0.028,  a:[11], b:[13], f:0.436 }, { m:0.028, a:[12], b:[14], f:0.436 }, // 上腕
-  { m:0.016,  a:[13], b:[15], f:0.430 }, { m:0.016, a:[14], b:[16], f:0.430 }, // 前腕
-  { m:0.006,  a:[15], b:[19], f:0.5 },   { m:0.006, a:[16], b:[20], f:0.5 },   // 手
-  { m:0.100,  a:[23], b:[25], f:0.433 }, { m:0.100, a:[24], b:[26], f:0.433 }, // 大腿
-  { m:0.0465, a:[25], b:[27], f:0.433 }, { m:0.0465,a:[26], b:[28], f:0.433 }, // 下腿
-  { m:0.0145, a:[29], b:[31], f:0.5 },   { m:0.0145,a:[30], b:[32], f:0.5 },   // 足
+  { m:0.0694, a:[7,8],   b:[7,8],   f:0.5 },    // 頭 (耳の中点)
+  { m:0.4346, a:[11,12], b:[23,24], f:0.45 },   // 体幹（肩中点→腰中点）
+  { m:0.0271, a:[11], b:[13], f:0.577 }, { m:0.0271, a:[12], b:[14], f:0.577 }, // 上腕
+  { m:0.0162, a:[13], b:[15], f:0.457 }, { m:0.0162, a:[14], b:[16], f:0.457 }, // 前腕
+  { m:0.0061, a:[15], b:[19], f:0.79 },  { m:0.0061, a:[16], b:[20], f:0.79 },  // 手
+  { m:0.1416, a:[23], b:[25], f:0.41 },  { m:0.1416, a:[24], b:[26], f:0.41 },  // 大腿
+  { m:0.0433, a:[25], b:[27], f:0.44 },  { m:0.0433, a:[26], b:[28], f:0.44 },  // 下腿
+  { m:0.0137, a:[29], b:[31], f:0.44 },  { m:0.0137, a:[30], b:[32], f:0.44 },  // 足（かかと→つま先）
 ];
 const mid = (P, ids) => { let x=0,y=0,z=0; for (const i of ids){x+=P[i].x;y+=P[i].y;z+=P[i].z;} const n=ids.length; return {x:x/n,y:y/n,z:z/n}; };
 function cogOf(P) {
@@ -373,19 +613,27 @@ function cogOf(P) {
 // MediaPipe world: x右, y下, z奥行き(手前が負)。Three: X右, Y上, Z手前 に変換
 const toV = p => new THREE.Vector3(p.x, -p.y, -p.z);
 const UP = new THREE.Vector3(0,1,0);
+const tilt = { pitch: 0, roll: 0 }; // カメラ傾き補正（度）
 function poseData(i) {
   const w = show.smooth ? worldSmooth[i] : frames[i]?.world;
-  if (!w) return null;
+  if (!w || !fwdArr[i]) return null;
   const P = w.map(toV);
-  // 足の最下点を地面(Y=0)に合わせる
-  let floor = Infinity; for (let k=27;k<=32;k++) floor = Math.min(floor, P[k].y);
-  for (const v of P) v.y -= floor;
-  const cog = toV(cogOf(w)); cog.y -= floor;
+  const cog = toV(cogOf(w));
+  const fwd = fwdArr[i].clone();
+  // カメラの傾き補正: 横方向軸まわり(pitch)と前後軸まわり(roll)に回転
+  if (tilt.pitch || tilt.roll) {
+    const right0 = new THREE.Vector3().crossVectors(fwd, UP).normalize();
+    const q = new THREE.Quaternion().setFromAxisAngle(right0, THREE.MathUtils.degToRad(tilt.pitch))
+      .multiply(new THREE.Quaternion().setFromAxisAngle(fwd, THREE.MathUtils.degToRad(tilt.roll)));
+    for (const v of P) v.applyQuaternion(q);
+    cog.applyQuaternion(q); fwd.applyQuaternion(q); fwd.y = 0; fwd.normalize();
+  }
+  // 足の最下点（時間方向の中央値）を地面(Y=0)に合わせる
+  let floor = tilt.pitch || tilt.roll ? Infinity : floorArr[i];
+  if (!isFinite(floor)) { floor = Infinity; for (let k=27;k<=32;k++) floor = Math.min(floor, P[k].y); }
+  for (const v of P) v.y -= floor; cog.y -= floor;
   const feet = new THREE.Vector3(); for (let k=27;k<=32;k++) feet.add(P[k]); feet.multiplyScalar(1/6);
-  // 進行方向（かかと→つま先の平均、水平成分）
-  const fwdL = P[31].clone().sub(P[29]), fwdR = P[32].clone().sub(P[30]);
-  const fwd = fwdL.add(fwdR); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0,0,-1); fwd.normalize();
-  const lat = new THREE.Vector3().crossVectors(UP, fwd).normalize(); // スキーヤーから見て左向き
+  const right = new THREE.Vector3().crossVectors(fwd, UP).normalize(); // スキーヤーから見て右向き
   const hipMid = P[23].clone().add(P[24]).multiplyScalar(.5);
   const shMid = P[11].clone().add(P[12]).multiplyScalar(.5);
   const trunk = shMid.clone().sub(hipMid);
@@ -396,11 +644,11 @@ function poseData(i) {
   const ang = (A,B,C) => { const u=A.clone().sub(B), v=C.clone().sub(B); return THREE.MathUtils.radToDeg(u.angleTo(v)); };
   const line = cog.clone().sub(feet);
   return {
-    P, cog, feet, fwd, lat, floor,
-    cogFwd: d.dot(fwd)*100, cogLat: -d.dot(lat)*100,          // cm, 左右は右が正
-    lean: -inPlane(line, lat),                                 // 内傾角: 右へ傾くと正
+    P, cog, feet, fwd, right, floor,
+    cogFwd: d.dot(fwd)*100, cogLat: d.dot(right)*100,         // cm, 前と右が正
+    lean: inPlane(line, right),                                // 内傾角: 右へ傾くと正
     trunkFwd: inPlane(trunk, fwd),                             // 前傾角
-    trunkLat: -inPlane(trunk, lat),                            // 上体の左右傾き
+    trunkLat: inPlane(trunk, right),                           // 上体の左右傾き
     kneeL: ang(P[23],P[25],P[27]), kneeR: ang(P[24],P[26],P[28]),
     hipH: hipMid.y*100,
   };
@@ -441,6 +689,7 @@ function initThree() {
   const skiGeo = new THREE.BoxGeometry(.09, .012, 1.7);
   fig.skiL = new THREE.Mesh(skiGeo, new THREE.MeshStandardMaterial({ color:COL.L, transparent:true, opacity:.75 })); fig.add(fig.skiL);
   fig.skiR = new THREE.Mesh(skiGeo, new THREE.MeshStandardMaterial({ color:COL.R, transparent:true, opacity:.75 })); fig.add(fig.skiR);
+  fig.skiL.material._base = fig.skiR.material._base = .75; fig.skiL.material._t = fig.skiR.material._t = true;
   trailLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color:COL.COG, transparent:true, opacity:.7 })); scene.add(trailLine);
 
   setView('cam');
@@ -452,10 +701,20 @@ function resizeThree() {
   const el = $('three'), w = el.clientWidth, h = el.clientHeight || w * .75;
   renderer.setSize(w, h, true); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
+let curView = 'cam';
 function setView(v) {
+  curView = v;
   const t = new THREE.Vector3(0, .9, 0), r = 3.2;
-  const pos = { cam:[0.0,1.2,r], side:[r,1.0,0], front:[0,1.0,-r], back:[0,1.6,r*0.9], top:[0.001,r*1.3,0] }[v];
-  camera.position.set(...pos); controls.target.copy(t); controls.update();
+  // 横・正面・後ろはスキーヤーの進行方向を基準にする（分からなければ画面座標）
+  const d = analyzed ? poseData(idx) : null;
+  const fwd = d ? d.fwd : new THREE.Vector3(0, 0, -1), right = d ? d.right : new THREE.Vector3(1, 0, 0);
+  let pos;
+  if (v === 'cam') pos = new THREE.Vector3(0, 1.2, r);
+  else if (v === 'side') pos = right.clone().multiplyScalar(r).setY(1.0);
+  else if (v === 'front') pos = fwd.clone().multiplyScalar(r).setY(1.0);
+  else if (v === 'back') pos = fwd.clone().multiplyScalar(-r * 0.9).setY(1.6);
+  else pos = new THREE.Vector3(0.001, r * 1.3, 0);
+  camera.position.copy(pos); controls.target.copy(t); controls.update();
   document.querySelectorAll('.viewbtns button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
 }
 document.querySelectorAll('.viewbtns button').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
@@ -478,10 +737,19 @@ function placeSki(mesh, ankle, heel, toe, fwd) {
   mesh.position.copy(center);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), dir);
 }
+function setFigOpacity(a) {
+  if (fig._op === a) return; fig._op = a;
+  fig.traverse(o => { if (o.material && !(o.material instanceof THREE.LineDashedMaterial)) { o.material.transparent = a < 1 || o.material._t; o.material.opacity = a * (o.material._base ?? 1); } });
+}
 function update3D() {
   if (!fig) return;
-  const d = poseData(idx);
+  let d = poseData(idx), held = false;
+  if (!d) {
+    // 未検出のコマでは、直近（2秒以内）の姿勢を薄く表示したままにする
+    for (let k = idx - 1, lim = Math.max(0, idx - Math.round(2 / (frames[1]?.t - frames[0]?.t || 0.1))); k >= lim; k--) { d = poseData(k); if (d) { held = true; break; } }
+  }
   fig.visible = !!d; if (!d) return;
+  setFigOpacity(held ? 0.35 : 1);
   const { P, cog, feet, fwd } = d;
   P.forEach((v, i) => fig.joints[i].position.copy(v));
   fig.bones.forEach((m, k) => setCyl(m, P[BONES[k][0]], P[BONES[k][1]], .022));
@@ -530,6 +798,9 @@ function setIndex(i, seek=true) {
   i = Math.max(0, Math.min(frames.length-1, i));
   idx = i; slider.value = i;
   $('time').textContent = `${frames[i].t.toFixed(2)} s / ${video.duration.toFixed(2)} s　(${i+1} / ${frames.length})`;
+  const src = frames[i].src;
+  $('detTag').textContent = src === 'det' ? '検出' : src === 'interp' ? '補間（前後のコマから推定）' : '未検出';
+  $('detTag').style.color = src === 'det' ? '#86EFAC' : src === 'interp' ? '#FDE047' : '#FCA5A5';
   if (seek && Math.abs(video.currentTime - frames[i].t) > 0.001) video.currentTime = frames[i].t;
   drawOverlay(); update3D(); updateMetrics();
 }
@@ -560,19 +831,21 @@ function tick() {
   if (i !== idx) setIndex(i, false);
   requestAnimationFrame(tick);
 }
-video.addEventListener('seeked', () => { if (!playing && frames.length) { const i = nearestIndex(video.currentTime); if (i !== idx) setIndex(i, false); } });
+video.addEventListener('seeked', () => { if (!playing && !running && analyzed && frames.length) { const i = nearestIndex(video.currentTime); if (i !== idx) setIndex(i, false); } });
 document.addEventListener('keydown', e => {
-  if (!frames.length || e.target.tagName === 'SELECT') return;
+  if (!frames.length || !analyzed || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
   if (e.key === 'ArrowRight') { pause(); setIndex(idx+1); e.preventDefault(); }
   else if (e.key === 'ArrowLeft') { pause(); setIndex(idx-1); e.preventDefault(); }
   else if (e.key === ' ') { playing ? pause() : play(); e.preventDefault(); }
 });
 
+for (const k of ['pitch', 'roll']) $(k).addEventListener('input', () => { tilt[k] = +$(k).value; $(k + 'V').textContent = tilt[k]; update3D(); updateMetrics(); });
+
 // ---------- 書き出し ----------
 $('btnExport').addEventListener('click', () => {
-  const data = frames.map((f,i) => { const d = poseData(i); return { t:f.t, detected:!!f.world, world:f.world,
+  const data = frames.map((f,i) => { const d = poseData(i); return { t:f.t, detected:f.src==='det', interpolated:f.src==='interp', world:f.world,
     metrics: d ? { cogFwd:d.cogFwd, cogLat:d.cogLat, lean:d.lean, trunkFwd:d.trunkFwd, trunkLat:d.trunkLat, kneeL:d.kneeL, kneeR:d.kneeR, hipH:d.hipH } : null }; });
-  const blob = new Blob([JSON.stringify({ source:$('fileName').textContent, fps:+$('fps').value, model:$('model').value, frames:data })], { type:'application/json' });
+  const blob = new Blob([JSON.stringify({ source:$('fileName').textContent, fps:+$('fps').value, model:$('model').value, sensitivity:+$('sens').value, frames:data })], { type:'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = ($('fileName').textContent || 'ski') + '.pose.json'; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
