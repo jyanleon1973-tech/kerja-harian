@@ -110,7 +110,9 @@
         <select id="fps">
           <option value="10">10 /秒</option>
           <option value="15" selected>15 /秒</option>
-          <option value="30">30 /秒</option>
+          <option value="30">30 /秒（動画の標準）</option>
+          <option value="60">60 /秒（スロー撮影向け）</option>
+          <option value="120">120 /秒（スロー撮影向け）</option>
         </select>
       </label>
       <label class="lbl">範囲
@@ -134,6 +136,7 @@
     <div class="bar"><div id="prog"></div></div>
     <div class="status" id="status">動画を選んでください。1人が大きく映っている横または斜め前からの固定カメラ映像が最も精度が出ます。</div>
     <div class="status" id="targetHint"></div>
+    <div class="note" style="margin-top:6px">解析コマ数は動画の撮影コマ数（通常 30、スローモーション撮影なら 60〜240）に合わせると最も細かく見られます。それ以上にしても同じ絵が増えるだけです。同じ絵のコマは自動で飛ばすので時間はあまり増えません。</div>
     <details class="tips"><summary>撮影のコツ（精度を上げるために）</summary>
       <ol>
         <li>スマホは横向き。三脚か雪に刺したストックに固定し、撮影中にパン・ズーム操作をしない。</li>
@@ -183,6 +186,7 @@
         <span><i style="background:#F87171"></i>内傾角 °</span>
         <span><i style="background:#A78BFA"></i>上体の前かがみ °</span>
         <span><i style="background:#34D399"></i>重心 前後 cm</span>
+        <span><i style="background:#FDE047"></i>肩の水平度 °</span>
         <span><i style="background:rgba(245,158,11,.5); border-radius:2px"></i>左ターン</span>
         <span><i style="background:rgba(56,189,248,.5); border-radius:2px"></i>右ターン</span>
       </div>
@@ -360,12 +364,25 @@ async function analyze() {
     let roi = target ? { cx: target.x * vw, cy: target.y * vh, size: Math.max(vh * 0.5, 256) } : null;
     let prevCenter = null, lostCount = 0, lastGood = null, lastGoodIdx = -1, lastSize = 0;
     const boneHist = []; // 骨の長さの履歴（体型と合わない誤検出を捨てる）
+    let prevSig = null, prevSigRoi = null, prevFrame = null, dupCount = 0; // 同じ絵のコマ（撮影コマ数より細かく解析した時）は検出を省く
     const t0 = performance.now();
     for (let i = 0; i < total; i++) {
       if (abortFlag) break;
       const t = i * dt;
       await seekTo(t);
       await nextPaint();
+      // 直前のコマと同じ絵なら、検出せずに結果を複製する
+      // 撮影コマ数より細かく解析している時だけ使う。人物の周り（roi）だけを比べ、小さく映る人の動きを見逃さないようにする
+      // 比較は前のコマと同じ領域で行う（追跡領域は毎コマ動くため）
+      const cmp = fps > 30 && prevSig ? frameSignature(prevSigRoi, vw, vh) : null;
+      if (cmp && prevFrame && sameSignature(cmp, prevSig)) {
+        frames.push({ t, lm: prevFrame.lm, world: prevFrame.world, src: prevFrame.src, ski: prevFrame.ski });
+        if (prevFrame.src === 'det') lostCount = 0; else lostCount++;
+        dupCount++;
+        if (i % 2 === 0) { progEl.style.width = (100 * (i + 1) / total).toFixed(1) + '%'; }
+        continue;
+      }
+      if (fps > 30) { prevSigRoi = roi; prevSig = roi ? frameSignature(roi, vw, vh) : cmp || frameSignature(null, vw, vh); }
       let det = null;
       try {
         det = roi ? detectIn(lm, roi, vw, vh) : null;
@@ -397,7 +414,8 @@ async function analyze() {
       if (det) {
         let ski = null;
         try { ski = detectSkis(det.lm, det.world, vw, vh); } catch (e) { console.warn('ski', e); }
-        frames.push({ t, lm: det.lm, world: det.world, src: 'det', ski });
+        prevFrame = { t, lm: det.lm, world: det.world, src: 'det', ski };
+        frames.push(prevFrame);
         pushBones(det.world, boneHist);
         const b = bboxOf(det.lm);
         const size = Math.max(b.w * vw, b.h * vh) * 1.6;
@@ -407,7 +425,8 @@ async function analyze() {
         roi = { cx, cy, size: Math.max(size, 128) };
         lostCount = 0; lastGood = det.lm; lastGoodIdx = i; lastSize = Math.max(b.w * vw, b.h * vh);
       } else {
-        frames.push({ t, lm: null, world: null, src: null });
+        prevFrame = { t, lm: null, world: null, src: null, ski: null };
+        frames.push(prevFrame);
         lostCount++;
         if (roi && lostCount >= 2) roi = { cx: roi.cx, cy: roi.cy, size: roi.size * 1.6 }; // 見失ったら範囲を広げる
         if (lostCount >= 6) roi = null;
@@ -425,7 +444,7 @@ async function analyze() {
     analyzed = true;
     buildCache();
     progEl.style.width = '100%';
-    setStatus(`解析完了: ${frames.length} コマ中 ${detected} コマで検出、${filled} コマを前後から補間${abortFlag ? '（途中で中止）' : ''}。` +
+    setStatus(`解析完了: ${frames.length} コマ中 ${detected} コマで検出、${filled} コマを前後から補間${dupCount ? `、同じ絵のコマ ${dupCount} を省略` : ''}${abortFlag ? '（途中で中止）' : ''}。` +
       (detected < frames.length * 0.5 ? ' 検出率が低めです。動画の中の人をタップして対象を指定する、検出感度を上げる、人が大きく映る動画（ズーム撮影やトリミング）を使う、を試してください。' : ''),
       detected < frames.length * 0.5);
     $('threePane').classList.remove('hidden'); $('btnExport').classList.remove('hidden');
@@ -448,6 +467,22 @@ async function analyze() {
   }
 }
 
+// コマの簡易指紋（32×18 の明るさ）。撮影コマ数より細かく解析した時の重複コマ判定に使う
+const sigCv = document.createElement('canvas'); sigCv.width = 32; sigCv.height = 18;
+const sigCtx = sigCv.getContext('2d', { willReadFrequently: true });
+function frameSignature(roi, vw, vh) {
+  if (roi) {
+    const size = Math.min(roi.size, vw, vh), x0 = Math.max(0, Math.min(vw - size, roi.cx - size / 2)), y0 = Math.max(0, Math.min(vh - size, roi.cy - size / 2));
+    sigCtx.drawImage(video, x0, y0, size, size, 0, 0, 32, 18);
+  } else sigCtx.drawImage(video, 0, 0, 32, 18);
+  const d = sigCtx.getImageData(0, 0, 32, 18).data, out = new Float32Array(32 * 18);
+  for (let i = 0; i < out.length; i++) out[i] = d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+  return out;
+}
+function sameSignature(a, b) {
+  let diff = 0, mx = 0; for (let i = 0; i < a.length; i++) { const e = Math.abs(a[i] - b[i]); diff += e; if (e > mx) mx = e; }
+  return diff / a.length < 1.5 && mx < 12; // 圧縮ノイズ程度の差は同じ絵とみなす
+}
 // 切り出し検出。roi があればその正方形領域を 512px に拡大して検出し、座標を元画像の正規化座標に戻す
 const work = document.createElement('canvas'); work.width = work.height = 512;
 const wctx = work.getContext('2d');
@@ -726,15 +761,17 @@ function fillGaps(maxGap) {
 let fwdArr = [], floorArr = [], skiArr = [];
 window.skiDebug = () => ({ frames, skiArr, fwdArr });
 function buildSmooth() {
-  // 中心重み付き5コマ窓（オフライン処理なので遅れなし）
-  const W = [1, 2, 3, 2, 1];
+  // 中心重み付きの窓（オフライン処理なので遅れなし）。幅は時間で決める（約 ±0.1 秒）
+  const dt0 = frames.length > 1 ? frames[1].t - frames[0].t : 0.1;
+  const HW = Math.max(1, Math.min(6, Math.round(0.1 / dt0)));
+  const W = []; for (let k = -HW; k <= HW; k++) W.push(HW + 1 - Math.abs(k));
   worldSmooth = frames.map((f, i) => {
     if (!f.world) return null;
     return f.world.map((p, j) => {
       let x = 0, y = 0, z = 0, wsum = 0;
-      for (let k = -2; k <= 2; k++) {
+      for (let k = -HW; k <= HW; k++) {
         const g = frames[i + k]; if (!g || !g.world) continue;
-        const w = W[k + 2]; x += g.world[j].x * w; y += g.world[j].y * w; z += g.world[j].z * w; wsum += w;
+        const w = W[k + HW]; x += g.world[j].x * w; y += g.world[j].y * w; z += g.world[j].z * w; wsum += w;
       }
       return { x: x / wsum, y: y / wsum, z: z / wsum, visibility: p.visibility };
     });
@@ -757,7 +794,7 @@ function buildSmooth() {
   fwdArr = raw.map((v, i) => {
     if (!v) return null;
     const acc = new THREE.Vector3();
-    for (let k = -2; k <= 2; k++) if (raw[i + k]) acc.addScaledVector(raw[i + k], W[k + 2]);
+    for (let k = -HW; k <= HW; k++) if (raw[i + k]) acc.addScaledVector(raw[i + k], W[k + HW]);
     acc.y = 0; return acc.lengthSq() > 1e-6 ? acc.normalize() : v;
   });
   // 板の向き: 画像からの検出（信頼度で重み付け）＋ 足の向き ＋ 進行方向（弱い事前情報）を合成し、時間方向に平滑化
@@ -788,7 +825,7 @@ function buildSmooth() {
     const out = { Limg: r.Limg, Rimg: r.Rimg };
     for (const key of ['L', 'R']) {
       const acc = new THREE.Vector3();
-      for (let k = -2; k <= 2; k++) if (rawSki[i + k]) acc.addScaledVector(rawSki[i + k][key], W[k + 2]);
+      for (let k = -HW; k <= HW; k++) if (rawSki[i + k]) acc.addScaledVector(rawSki[i + k][key], W[k + HW]);
       out[key] = acc.lengthSq() > 1e-6 ? acc.normalize() : r[key];
     }
     return out;
@@ -952,7 +989,13 @@ function poseData(i) {
   const shinL = inPlane(P[25].clone().sub(P[27]), fwd), shinR = inPlane(P[26].clone().sub(P[28]), fwd);
   const edgeL = inPlane(P[25].clone().sub(P[27]), right), edgeR = inPlane(P[26].clone().sub(P[28]), right);
   const skiYawL = yaw(skiL), skiYawR = yaw(skiR);
+  // 肩と骨盤の水平度: 左→右の線が水平からどれだけ傾くか（右側が下がると正）
+  const lineTilt = (A, B) => { const v = B.clone().sub(A); return THREE.MathUtils.radToDeg(Math.atan2(-v.y, Math.abs(v.dot(right)) || 1e-6)); };
+  const shoulderTilt = lineTilt(P[11], P[12]), pelvisTilt = lineTilt(P[23], P[24]);
   return {
+    shoulderTilt, pelvisTilt, torsoTwistTilt: shoulderTilt - pelvisTilt,
+    shoulderIn: inSign ? shoulderTilt * -inSign : null,   // ターン外側の肩が下がると正
+    pelvisIn: inSign ? pelvisTilt * -inSign : null,
     P, cog, feet, fwd, right, pelvis, floor, skiL, skiR, turn, skiConf: sk ? [sk.Limg, sk.Rimg] : [0, 0],
     cogFwd: d.dot(fwd) * 100,                               // cm, 板の向きに沿って前が正
     cogLat: d.dot(right) * 100,                             // cm, 右が正
@@ -1130,6 +1173,9 @@ const METRICS = [
   { g:'ポジション', k:'股関節の高さ', f:d => d.hipPct, u:'%', s:v => v > 85 ? '高い（立ち気味）' : v < 65 ? '低い（深く沈む）' : '中くらい', d:'脚の長さに対する割合' },
   { g:'傾き', k:'内傾角', f:d => d.turn ? d.leanIn : d.lean, u:'°', s:(v, d) => d.turn ? (v > 0 ? 'ターン内側へ' : 'ターン外側へ（注意）') : (near0(v, 4) ? 'ほぼ直立' : (v > 0 ? '右へ' : '左へ')), d:'足元→重心の線と鉛直の角' },
   { g:'傾き', k:'外傾', f:d => d.angulation, u:'°', s:v => v > 5 ? '上体を外側に起こしている' : v < -3 ? '内倒気味（上体も内側へ）' : '内傾と上体がほぼ一直線', d:'内傾角 − 上体の左右の傾き（ターン中のみ）' },
+  { g:'傾き', k:'肩の水平度', f:d => d.turn ? d.shoulderIn : d.shoulderTilt, u:'°', s:(v, d) => near0(v, 3) ? '肩は水平' : (d.turn ? (v > 0 ? '外側の肩が下がる' : '内側の肩が下がる（内倒の兆候）') : (v > 0 ? '右肩が下がる' : '左肩が下がる')), d:'左右の肩を結ぶ線と水平の角', warn:(v, d) => d && d.turn && v < -5 },
+  { g:'傾き', k:'骨盤の水平度', f:d => d.turn ? d.pelvisIn : d.pelvisTilt, u:'°', s:(v, d) => near0(v, 3) ? '骨盤は水平' : (d.turn ? (v > 0 ? '外側の腰が下がる' : '内側の腰が下がる') : (v > 0 ? '右腰が下がる' : '左腰が下がる')), d:'左右の腰を結ぶ線と水平の角' },
+  { g:'傾き', k:'肩と骨盤の差', f:d => d.torsoTwistTilt, u:'°', s:v => near0(v, 4) ? '肩と骨盤は平行' : '肩と骨盤の傾きが違う（上体の横の折れ）', d:'肩の傾き − 骨盤の傾き' },
   { g:'傾き', k:'上体の前かがみ', f:d => d.trunkFwd, u:'°', s:v => near0(v, 5) ? '直立' : (v > 0 ? '前かがみ' : '起きている'), d:'腰→肩の線と鉛直の角。後傾はすね角と重心前後で判断' },
   { g:'傾き', k:'外向', f:d => d.counter, u:'°', s:(v, d) => near0(v, 6) ? '骨盤は板と平行' : (d.turn ? (((v > 0) !== (d.turn > 0)) ? '骨盤がターン外側を向く（外向）' : '骨盤がターン内側を向く（内向）') : (v > 0 ? '骨盤が右を向く' : '骨盤が左を向く')), d:'骨盤の向きと板の向きのねじれ' },
   { g:'脚', k:d => `膝の曲がり ${legName(d, 'L')}`, f:d => d.kneeL, u:'°', s:() => '0°で伸びきり', d:'股関節-膝-足首' },
@@ -1159,7 +1205,7 @@ function updateMetrics() {
     const v = d ? m.f(d) : null;
     if (typeof m.k === 'function') $('mk' + i).textContent = d ? m.k(d) : '';
     $('mv' + i).textContent = v == null ? '–' : (Math.abs(v) < 100 ? v.toFixed(1) : Math.round(v));
-    $('mw' + i).classList.toggle('warn', v != null && !!(m.warn && m.warn(v)));
+    $('mw' + i).classList.toggle('warn', v != null && !!(m.warn && m.warn(v, d)));
     $('md' + i).textContent = v == null ? (d ? (m.g === '傾き' && (m.k === '外傾') ? 'ターン中のみ' : '–') : '検出なし') : `${m.s(v, d)}　${m.src ? m.src(d) : m.d}`;
   });
 }
@@ -1167,7 +1213,7 @@ function updateMetrics() {
 // ---------- 時系列グラフ ----------
 const graph = $('graph'), gctx = graph.getContext('2d');
 function buildCache() {
-  metricsCache = frames.map((_, i) => { const d = poseData(i); return d ? { lean: d.lean, trunkFwd: d.trunkFwd, cogFwd: d.cogFwd, turn: d.turn, cogLat: d.cogLat, kneeL: d.kneeL, kneeR: d.kneeR, shinL: d.shinL, shinR: d.shinR, angulation: d.angulation, counter: d.counter, foreAft: d.foreAft, stance: d.stance, hipPct: d.hipPct, skiOpen: d.skiOpen, edgeL: d.edgeL, edgeR: d.edgeR, skiYawL: d.skiYawL, skiYawR: d.skiYawR } : null; });
+  metricsCache = frames.map((_, i) => { const d = poseData(i); return d ? { lean: d.lean, trunkFwd: d.trunkFwd, cogFwd: d.cogFwd, turn: d.turn, cogLat: d.cogLat, kneeL: d.kneeL, kneeR: d.kneeR, shinL: d.shinL, shinR: d.shinR, angulation: d.angulation, counter: d.counter, shoulderTilt: d.shoulderTilt, pelvisTilt: d.pelvisTilt, foreAft: d.foreAft, stance: d.stance, hipPct: d.hipPct, skiOpen: d.skiOpen, edgeL: d.edgeL, edgeR: d.edgeR, skiYawL: d.skiYawL, skiYawR: d.skiYawR } : null; });
 }
 function drawGraph() {
   const dpr = devicePixelRatio, w = graph.clientWidth, h = graph.clientHeight;
@@ -1180,7 +1226,7 @@ function drawGraph() {
   for (let i = 0; i < n; i++) { const c = metricsCache[i]; if (!c || !c.turn) continue; gctx.fillStyle = c.turn < 0 ? 'rgba(245,158,11,.18)' : 'rgba(56,189,248,.18)'; gctx.fillRect(X(i), 0, Math.max(1, w / n + .5), h); }
   // 0 線
   const mid = h / 2; gctx.strokeStyle = '#334155'; gctx.lineWidth = 1; gctx.beginPath(); gctx.moveTo(0, mid); gctx.lineTo(w, mid); gctx.stroke();
-  const series = [['lean', '#F87171', 40], ['trunkFwd', '#A78BFA', 60], ['cogFwd', '#34D399', 40]]; // [キー, 色, フルスケール]
+  const series = [['lean', '#F87171', 40], ['trunkFwd', '#A78BFA', 60], ['cogFwd', '#34D399', 40], ['shoulderTilt', '#FDE047', 40]]; // [キー, 色, フルスケール]
   for (const [key, col, fs] of series) {
     gctx.strokeStyle = col; gctx.lineWidth = 1.5; gctx.beginPath(); let pen = false;
     for (let i = 0; i < n; i++) { const c = metricsCache[i]; if (!c || c[key] == null) { pen = false; continue; } const y = mid - Math.max(-1, Math.min(1, c[key] / fs)) * (h / 2 - 4); if (!pen) { gctx.moveTo(X(i), y); pen = true; } else gctx.lineTo(X(i), y); }
@@ -1266,8 +1312,8 @@ $('btnExport').addEventListener('click', () => {
   download(new Blob([JSON.stringify({ source: $('fileName').textContent, fps: +$('fps').value, model: $('model').value, sensitivity: +$('sens').value, tilt, frames: data })], { type: 'application/json' }), exportName() + '.pose.json');
 });
 $('btnCsv').addEventListener('click', () => {
-  const cols = ['t', 'src', 'turn', 'cogFwd', 'cogLat', 'lean', 'angulation', 'trunkFwd', 'counter', 'kneeL', 'kneeR', 'shinL', 'shinR', 'foreAft', 'stance', 'hipPct', 'skiOpen', 'skiYawL', 'skiYawR', 'edgeL', 'edgeR'];
-  const head = ['time_s', 'source', 'turn(-1L,1R)', 'cog_fore_aft_cm', 'cog_lateral_cm(right+)', 'lean_deg(right+)', 'angulation_deg', 'trunk_fwd_deg', 'counter_deg', 'knee_L_deg', 'knee_R_deg', 'shin_L_deg', 'shin_R_deg', 'fore_aft_L_minus_R_cm', 'stance_cm', 'hip_height_pct', 'ski_open_deg', 'ski_yaw_L_deg', 'ski_yaw_R_deg', 'edge_L_deg', 'edge_R_deg'];
+  const cols = ['t', 'src', 'turn', 'cogFwd', 'cogLat', 'lean', 'angulation', 'trunkFwd', 'counter', 'shoulderTilt', 'pelvisTilt', 'kneeL', 'kneeR', 'shinL', 'shinR', 'foreAft', 'stance', 'hipPct', 'skiOpen', 'skiYawL', 'skiYawR', 'edgeL', 'edgeR'];
+  const head = ['time_s', 'source', 'turn(-1L,1R)', 'cog_fore_aft_cm', 'cog_lateral_cm(right+)', 'lean_deg(right+)', 'angulation_deg', 'trunk_fwd_deg', 'counter_deg', 'shoulder_tilt_deg(right_low+)', 'pelvis_tilt_deg(right_low+)', 'knee_L_deg', 'knee_R_deg', 'shin_L_deg', 'shin_R_deg', 'fore_aft_L_minus_R_cm', 'stance_cm', 'hip_height_pct', 'ski_open_deg', 'ski_yaw_L_deg', 'ski_yaw_R_deg', 'edge_L_deg', 'edge_R_deg'];
   const rows = [head.join(',')];
   frames.forEach((f, i) => { const c = metricsCache[i]; rows.push(cols.map(k => k === 't' ? f.t.toFixed(3) : k === 'src' ? (f.src || '') : (c && c[k] != null ? (+c[k]).toFixed(2) : '')).join(',')); });
   download(new Blob(['﻿' + rows.join('\n')], { type: 'text/csv' }), exportName() + '.csv');
