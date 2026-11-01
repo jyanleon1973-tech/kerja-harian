@@ -159,6 +159,16 @@
     <div class="status" id="status">動画を選んでください。固定カメラで、選手が画面の 1/3 以上の大きさで映っている映像が最も精度が出ます。</div>
     <div class="status" id="targetHint"></div>
     <div class="note" style="margin-top:6px">解析コマ数は動画の撮影コマ数（通常 30、スローモーション撮影なら 60〜240）に合わせると最も細かく見られます。30 を超える設定では同じ絵のコマを自動で省きます。</div>
+    <details class="tips" id="serverBox"><summary>サーバー解析（高精度モデル・任意）</summary>
+      <div class="row" style="margin-top:8px">
+        <label class="lbl" style="flex:1; min-width:240px">API の URL
+          <input type="text" id="apiUrl" placeholder="http://localhost:8000" style="width:100%; margin-top:4px; background:#0F172A; color:#E2E8F0; border:1px solid #475569; border-radius:8px; padding:7px 10px; font-size:14px">
+        </label>
+        <button id="btnServer" class="primary" disabled>サーバーで解析</button>
+        <button id="btnServerAbort" class="danger hidden">中止</button>
+      </div>
+      <div class="status" id="serverStatus">動画を端末からサーバーにアップロードし、サーバー側のパイプライン（追跡・姿勢推定・板検出・時系列補正・ターン判定）で解析します。結果はこの画面の同じ表示で確認できます。</div>
+    </details>
     <details class="tips"><summary>撮影のコツ（精度を上げるために）</summary>
       <ol>
         <li>スマホは横向き。三脚か雪に刺したストックに固定し、撮影中にパン・ズーム操作をしない（パン・ズームがあっても角度系の指標は使えますが、位置系の指標の信頼度が下がります）。</li>
@@ -320,7 +330,7 @@ $('file').addEventListener('change', e => {
   video.addEventListener('loadedmetadata', () => {
     if (!isFinite(video.duration)) { video.currentTime = 1e6; video.addEventListener('durationchange', () => { video.currentTime = 0; }, { once: true }); }
     VW = video.videoWidth; VH = video.videoHeight;
-    $('btnAnalyze').disabled = false;
+    $('btnAnalyze').disabled = false; $('btnServer').disabled = false;
     setStatus(`読み込み完了: ${VW}×${VH}, ${video.duration.toFixed(1)} 秒。選手が小さい・複数人いる場合は動画の中の選手をタップしてから「解析開始」を押してください。`);
     resizeOverlay();
   }, { once: true });
@@ -884,6 +894,7 @@ function computeMetrics(i) {
   const lm = lmS[i], w = worldS[i], f = frames[i];
   if (!lm || !f || !f.q) return null;
   const view = viewInfo.view, q = f.q;
+  if (!fwdArr[i] && w) fwdArr[i] = null; // サーバー結果など進行方向がない場合、3D 推定は不可扱い
   // --- 2D 幾何（px、カメラの左右傾き補正を適用） ---
   const cx = VW / 2, cy = VH / 2, cr = Math.cos(-THREE.MathUtils.degToRad(tilt.roll)), sr = Math.sin(-THREE.MathUtils.degToRad(tilt.roll));
   const pt = j => { const x = lm[j].x * VW - cx, y = lm[j].y * VH - cy; return { x: x * cr - y * sr + cx, y: x * sr + y * cr + cy }; };
@@ -1430,6 +1441,72 @@ $('btnCsv').addEventListener('click', () => {
   frames.forEach((f, i) => { const d = metricsCache[i]; rows.push([f.t.toFixed(3), f.src || '', turnArr[i] ?? '', phaseArr[i] ?? ''].concat(METRIC_KEYS.flatMap(k => { const r = d && d.M[k]; return r ? [r.v == null ? '' : r.v.toFixed(2), r.cls, r.conf.toFixed(2)] : ['', '', '']; })).join(',')); });
   download(new Blob(['﻿' + rows.join('\n')], { type: 'text/csv' }), exportName() + '.csv');
 });
+// ========== サーバー解析 ==========
+const apiInput = $('apiUrl');
+try { apiInput.value = localStorage.getItem('skiApiUrl') || ''; } catch (e) {}
+apiInput.addEventListener('change', () => { try { localStorage.setItem('skiApiUrl', apiInput.value.trim()); } catch (e) {} });
+let serverAbort = false, serverJob = null;
+const sStatus = (m, warn) => { $('serverStatus').textContent = m; $('serverStatus').classList.toggle('warn', !!warn); };
+$('btnServerAbort').addEventListener('click', () => { serverAbort = true; });
+$('btnServer').addEventListener('click', async () => {
+  const base = apiInput.value.trim().replace(/\/+$/, '');
+  const file = $('file').files[0];
+  if (!base || !file) { sStatus('API の URL と動画を指定してください。', true); return; }
+  serverAbort = false; $('btnServer').disabled = true; $('btnServerAbort').classList.remove('hidden'); $('btnAnalyze').disabled = true;
+  try {
+    sStatus(`アップロード中… ${(file.size / 1e6).toFixed(1)} MB`);
+    const fd = new FormData(); fd.append('file', file, file.name);
+    const up = await fetch(base + '/api/uploads', { method: 'POST', body: fd });
+    if (!up.ok) throw new Error('アップロード失敗: ' + up.status + ' ' + (await up.text()).slice(0, 200));
+    const { upload_key } = await up.json();
+    const params = { fps: +$('fps').value, pose_model: $('model').value, sensitivity: +$('sens').value, view: $('viewSel').value, roll_deg: tilt.roll };
+    const rangeV = $('range').value; if (rangeV !== 'all') params.end_s = +rangeV;
+    if (target) params.target = [target.x, target.y];
+    const cr = await fetch(base + '/api/analysis/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upload_key, params }) });
+    if (!cr.ok) throw new Error('ジョブ作成失敗: ' + cr.status + ' ' + (await cr.text()).slice(0, 200));
+    serverJob = (await cr.json()).id;
+    let job;
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      if (serverAbort) { await fetch(`${base}/api/analysis/jobs/${serverJob}`, { method: 'DELETE' }).catch(() => {}); throw new Error('中止しました'); }
+      job = await (await fetch(`${base}/api/analysis/jobs/${serverJob}`)).json();
+      sStatus(`サーバー解析中 ${(100 * (job.progress || 0)).toFixed(0)}%　${job.stage || ''}　${job.message || ''}`);
+      if (job.status === 'done') break;
+      if (job.status === 'failed' || job.status === 'canceled') throw new Error(`サーバー側で${job.status === 'failed' ? '失敗' : '中止'}: ${(job.error || '').split('\n')[0]}`);
+    }
+    sStatus('結果を取得中…');
+    const res = await (await fetch(`${base}/api/analysis/jobs/${serverJob}/results?include_frames=true`)).json();
+    loadServerResults(res, job);
+  } catch (e) {
+    sStatus(String(e.message || e), true);
+  } finally {
+    $('btnServer').disabled = false; $('btnServerAbort').classList.add('hidden'); $('btnAnalyze').disabled = false;
+  }
+});
+// サーバーの結果をこの画面のデータ構造に流し込む（表示コードは共通。指標はサーバー計算のものを優先）
+function loadServerResults(res, job) {
+  pause();
+  const keepTarget = target; resetAnalysis(); target = keepTarget;
+  frames = res.frames.map(f => ({ t: f.t, lm: f.lmRaw || f.lm, world: f.world, src: f.src, ski: f.ski, q: f.q, flags: f.flags || [], dup: false }));
+  lmS = res.frames.map(f => f.lm || null); worldS = res.frames.map(f => f.world || null);
+  turnArr = res.frames.map(f => f.turn == null ? 0 : f.turn); phaseArr = res.frames.map(f => f.phase ?? null);
+  segments = res.segments || []; fwdArr = frames.map(() => null); floorArr = frames.map(() => null);
+  viewInfo = { view: res.view, auto: (res.view_auto || {}).auto || res.view, facing: (res.view_auto || {}).facing || 'toward', ratio: (res.view_auto || {}).ratio || 0 };
+  if ($('viewSel').value !== 'auto' && $('viewSel').value !== res.view) $('viewSel').value = res.view;
+  analyzed = true;
+  buildCache();
+  res.frames.forEach((f, i) => { if (f.metrics && metricsCache[i]) metricsCache[i].M = f.metrics; });
+  const q = res.quality || {};
+  setStatus(`サーバー解析完了（${res.model_versions && res.model_versions.pose ? res.model_versions.pose.split(';')[0] : 'server'}）: 検出率 ${(100 * (q.detect_rate || 0)).toFixed(0)}%、補間 ${(100 * (q.interp_rate || 0)).toFixed(0)}%、左右修正 ${q.lr_swaps ?? 0} 回、ターン不明 ${(100 * (q.turn_unknown_rate || 0)).toFixed(0)}%。撮影方向: ${VIEW_NAME[res.view] || res.view}。` + (res.warnings && res.warnings.length ? ' 注意: ' + res.warnings.join('／') : ''), (q.detect_rate || 0) < 0.5);
+  sStatus(`完了。ジョブ ${job.id}。段階別の所要時間: ` + (job.stages || []).map(s => `${s.stage} ${(s.duration_ms / 1000).toFixed(1)}s`).join(', '));
+  $('btnExport').classList.remove('hidden');
+  document.querySelectorAll('.ao').forEach(el => el.classList.remove('hidden'));
+  $('videoTag').textContent = '元動画 + 検出結果（サーバー）';
+  $('slider').max = frames.length - 1;
+  buildCards(); buildClsTable(); resizeOverlay();
+  setIndex(0); renderTurnTable();
+  $('viewer').scrollIntoView({ behavior: 'smooth' });
+}
 window.skiDebug = () => ({ frames, lmS, worldS, fwdArr, turnArr, segments, metricsCache, viewInfo });
 </script>
 </body>
