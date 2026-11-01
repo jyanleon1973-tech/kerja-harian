@@ -52,6 +52,7 @@ class JobParams(BaseModel):
     view: str = Field("auto", pattern="^(auto|side|front|back|oblique)$")
     target: Optional[list[float]] = Field(None, description="対象選手の位置 [x,y]（0-1）")
     roll_deg: float = Field(0, ge=-45, le=45)
+    ski_length_m: float = Field(1.65, ge=1.0, le=2.3, description="3D 表示に使う板の長さ（SL 約1.65、GS 約1.9）")
 
 
 class JobCreate(BaseModel):

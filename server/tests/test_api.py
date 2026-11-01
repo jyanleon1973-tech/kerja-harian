@@ -71,7 +71,7 @@ def test_job_lifecycle_on_video_without_person(client, tmp_path):
     jid = r.json()["id"]
     j = wait_done(client, jid)
     assert j["status"] == "done", j.get("error")
-    assert [s["stage"] for s in j["stages"]] == ["decode", "perframe", "temporal", "camera", "turns", "metrics", "vectors", "confidence", "results"]
+    assert [s["stage"] for s in j["stages"]] == ["decode", "perframe", "temporal", "camera", "turns", "metrics", "vectors", "pose3d", "confidence", "results"]
     assert "pose" in j["model_versions"]
     res = client.get(f"/api/analysis/jobs/{jid}/results").json()
     assert res["schema"] == "ski-analysis/2" and res["quality"]["detect_rate"] == 0 and res["frame_count"] >= 8
@@ -109,6 +109,8 @@ def test_job_on_real_person_video(client):
     assert res["quality"]["detect_rate"] > 0.8, res["quality"]
     f = next(f for f in res["frames"] if f["src"] == "det")
     assert len(f["lm"]) == 33 and f["metrics"] and f["q"][11] > 0.5
+    assert f["p3"] and len(f["p3"]["joints"]) == 33 and 0 <= f["p3"]["conf"] <= 1 and f["p3"]["ski"]["L"]["src"] in ("foot+pelvis", "edge2d+foot")
+    assert res["pose3d"]["summary"]["frames"] > 0
     assert res["view"] in ("side", "front", "back", "oblique")
     r = client.post(f"/api/analysis/jobs/{jid}/exports", json={"speed": 0.5, "to_i": 10})
     eid = r.json()["id"]

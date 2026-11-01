@@ -11,6 +11,7 @@ from .perframe import PerFrameStage
 from .temporal import TemporalStage
 from .turns import TurnStage
 from .vectors import VectorStage
+from .pose3d import Pose3DStage
 
 
 class ConfidenceStage:
@@ -50,11 +51,11 @@ class ResultStage:
     def run(self, ctx, data):
         frames = ctx.scratch["frames"]; metrics = ctx.scratch["metrics"]; turn = ctx.scratch["turn"]; phase = ctx.scratch["phase"]
         conf = data["confidence"]["per_frame"]
-        vec = data["vectors"]["vectors"]; ind = data["vectors"]["indicators"]; tend = data["vectors"]["tendency"]
+        vec = data["vectors"]["vectors"]; ind = data["vectors"]["indicators"]; tend = data["vectors"]["tendency"]; p3 = data["pose3d"]["pose3d"]
         out_frames = []
         for k, f in enumerate(frames):
             out_frames.append({
-                "vec": vec[k], "ind": ind[k], "tend": tend[k],
+                "vec": vec[k], "ind": ind[k], "tend": tend[k], "p3": p3[k],
                 "i": f["i"], "t": f["t"], "src": f.get("src"), "flags": f.get("flags", []),
                 "lm": f.get("kpS"), "lmRaw": f.get("kp"), "world": f.get("worldS"), "q": f.get("q"), "ski": f.get("ski"),
                 "turn": turn[k], "phase": phase[k], "metrics": metrics[k]["M"] if metrics[k] else None,
@@ -66,7 +67,7 @@ class ResultStage:
             "params": ctx.params, "video": data["decode"]["video"], "sample_fps": ctx.scratch["sample_fps"],
             "keypoint_format": data["perframe"]["keypoint_format"], "view": data["camera"]["view"], "view_auto": data["camera"]["view_auto"],
             "camera": {"moving": data["camera"]["camera_moving"], "total_shift_ratio": data["camera"]["total_shift_ratio"]},
-            "segments": ctx.scratch["segments"], "switches": data["turns"]["switches"], "vector_modes": data["vectors"]["modes"],
+            "segments": ctx.scratch["segments"], "switches": data["turns"]["switches"], "vector_modes": data["vectors"]["modes"], "pose3d": {"axes": data["pose3d"]["axes"], "ski_length_m": data["pose3d"]["ski_length_m"], "summary": data["pose3d"]["summary"]},
             "quality": data["confidence"]["summary"], "warnings": data["confidence"]["warnings"],
             "frames": out_frames,
         }
@@ -77,7 +78,7 @@ class ResultStage:
 
 
 def build_stages():
-    return [DecodeStage(), PerFrameStage(), TemporalStage(), CameraStage(), TurnStage(), MetricsStage(), VectorStage(), ConfidenceStage(), ResultStage()]
+    return [DecodeStage(), PerFrameStage(), TemporalStage(), CameraStage(), TurnStage(), MetricsStage(), VectorStage(), Pose3DStage(), ConfidenceStage(), ResultStage()]
 
 
 def run_job(ctx: Context, on_stage_done=None) -> dict[str, Any]:

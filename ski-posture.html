@@ -32,6 +32,23 @@
   .bar { height:8px; background:#0F172A; border-radius:4px; overflow:hidden; margin-top:8px; }
   .bar > div { height:100%; width:0; background:#22C55E; transition:width .2s; }
   .pane { background:#000; border-radius:14px; overflow:hidden; position:relative; }
+  .modebar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .modebar button { padding:8px 14px; }
+  .modebar .sp { flex:1; }
+  .stage { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
+  @media (min-width:900px) { .stage.split { grid-template-columns:1fr 1fr; } }
+  #pane3d { background:#0B1220; }
+  #three3d { width:100%; aspect-ratio:4/3; touch-action:none; overflow:hidden; }
+  @media (min-width:900px) { .split #three3d { aspect-ratio:1/1; } }
+  #three3d canvas { display:block; }
+  .viewbtns { position:absolute; right:8px; top:8px; display:flex; flex-direction:column; gap:4px; }
+  .viewbtns button { padding:5px 9px; font-size:11px; background:rgba(30,41,59,.85); }
+  .t3 { position:absolute; left:8px; bottom:8px; display:flex; gap:4px; flex-wrap:wrap; }
+  .t3 button { padding:5px 9px; font-size:11px; background:rgba(30,41,59,.85); }
+  .t3 button.on { background:#2563EB; }
+  .badge3d { position:absolute; left:10px; top:8px; display:flex; flex-direction:column; gap:4px; pointer-events:none; }
+  .badge3d span { font-size:11px; background:rgba(15,23,42,.75); padding:3px 8px; border-radius:6px; color:#CBD5E1; }
+  .badge3d span.warn { color:#FCA5A5; }
   .videowrap { position:relative; width:100%; }
   .videowrap.pick { cursor:crosshair; }
   .videowrap.pick::after { content:'解析したい選手をタップ'; position:absolute; left:50%; bottom:10px; transform:translateX(-50%); background:rgba(234,179,8,.9); color:#1F2937; font-size:12px; font-weight:700; padding:4px 10px; border-radius:8px; pointer-events:none; }
@@ -92,7 +109,7 @@
   .o { color:#86EFAC; } .e { color:#E4E4E7; } .x { color:#FCA5A5; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
 </script>
 </head>
 <body>
@@ -181,7 +198,15 @@
   </section>
 
   <section id="viewer" class="hidden">
-    <div class="pane">
+    <div class="modebar ao">
+      <button data-mode="video" class="active">① 動画解析</button>
+      <button data-mode="figure">② 3D人形</button>
+      <button data-mode="skis">③ 3D板のみ</button>
+      <span class="sp"></span>
+      <button id="btnSplit" class="small" title="PC では動画と 3D を左右に並べます">並べて表示</button>
+    </div>
+    <div class="stage" id="stage">
+    <div class="pane" id="videoPane">
       <div class="videowrap">
         <video id="video" playsinline muted preload="auto"></video>
         <canvas id="overlay"></canvas>
@@ -203,6 +228,17 @@
         </select>
         <button id="btnVideoExport">骨格入り動画を保存</button>
       </div>
+    </div>
+    <div class="pane hidden" id="pane3d">
+      <div id="three3d"></div>
+      <div class="badge3d"><span id="b3source"></span><span id="b3conf"></span><span id="b3view" class="warn hidden">撮影されていない角度からの姿勢は AI による推定です</span><span id="b3flags" class="warn hidden"></span></div>
+      <div class="viewbtns">
+        <button data-v3="front">正面</button><button data-v3="back">背面</button><button data-v3="left">左側面</button><button data-v3="right">右側面</button><button data-v3="top">真上</button><button data-v3="cam">撮影方向</button><button data-v3="free" class="active">自由</button>
+      </div>
+      <div class="t3">
+        <button data-s3="figure" class="on">人形</button><button data-s3="skis" class="on">板</button><button data-s3="boots" class="on">ブーツ</button><button data-s3="cog" class="on">重心</button><button data-s3="arrows" class="on">矢印</button><button data-s3="trail" class="on">軌跡</button>
+      </div>
+    </div>
     </div>
 
     <div class="card controls ao" style="margin-top:12px">
@@ -290,6 +326,7 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FilesetResolver, PoseLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 
 const $ = id => document.getElementById(id);
@@ -310,6 +347,9 @@ const region = { inIdx: null, outIdx: null, loop: false };
 let arrowMode = 'A';               // none | A | B（C は使用不可）
 let vecArr = [], indArr = [], tendArr = [], vecSource = 'client';  // 運動ベクトル・身体運動指標・荷重傾向（未検証）
 let refData = null;                // 比較用の参照データ
+let viewMode = 'video', split = false;                     // 表示モード: video | figure | skis
+const show3d = { figure:true, skis:true, boots:true, cog:true, arrows:true, trail:true };
+let p3Arr = [], p3Source = 'none', skiLenM = 1.65;        // 3D 姿勢（サーバー or 簡易）
 const QMIN = 0.5;      // これ未満の関節は「不確実」
 const SKI_MIN = 0.55;  // これ未満の板検出は「未検出」扱い
 
@@ -360,7 +400,7 @@ $('file').addEventListener('change', e => {
   video.addEventListener('error', () => setStatus('この動画はブラウザで再生できない形式です。別の形式（MP4/MOV）をお試しください。', true));
 });
 function resetAnalysis() {
-  vecSource = 'client'; vecArr = []; indArr = []; tendArr = [];
+  vecSource = 'client'; vecArr = []; indArr = []; tendArr = []; p3Arr = []; p3Source = 'none'; trail3 = { L: [], R: [], C: [] };
   frames = []; lmS = []; worldS = []; fwdArr = []; turnArr = []; phaseArr = []; segments = []; floorArr = []; metricsCache = [];
   idx = -1; analyzed = false; target = null; region.inIdx = region.outIdx = null; region.loop = false;
   viewInfo = { view: 'unknown', auto: 'unknown', facing: 'toward', ratio: 0 };
@@ -1027,7 +1067,7 @@ function computeMetrics(i) {
 
   return { M, view, turn, phase, inSign, facing, rightSign, P2, cog2, feet, ankMid, BH, q, src: f.src, skL, skR, shared: !!(sk && sk.shared) };
 }
-function buildCache() { metricsCache = frames.map((_, i) => computeMetrics(i)); buildVectors(); }
+function buildCache() { metricsCache = frames.map((_, i) => computeMetrics(i)); buildVectors(); if (p3Source !== 'server') buildP3Client(); }
 // 運動ベクトル。サーバー結果があればそれ（カメラ平行移動を補正済み）、なければ画像上の見かけの移動を計算する
 function buildVectors() {
   const n = frames.length; if (!n) { vecArr = []; indArr = []; tendArr = []; return; }
@@ -1464,7 +1504,7 @@ function setIndex(i, seek=true) {
   $('detTag').textContent = src === 'det' ? (frames[i].dup ? '検出（同じ絵）' : '検出') : src === 'interp' ? '補間（前後のコマから推定）' : '未検出';
   $('detTag').style.color = src === 'det' ? '#86EFAC' : src === 'interp' ? '#FDE047' : '#FCA5A5';
   if (seek && Math.abs(video.currentTime - frames[i].t) > 0.001) video.currentTime = frames[i].t;
-  drawOverlay(); updateMetrics(); drawGraph();
+  drawOverlay(); updateMetrics(); drawGraph(); update3D();
   const cur = document.querySelector('#turnTable tr.cur'); const seg = segments.find(s => i >= s.start && i <= s.end);
   if ((cur ? +cur.dataset.i : -1) !== (seg ? seg.start : -1)) document.querySelectorAll('#turnTable tr[data-i]').forEach(tr => tr.classList.toggle('cur', !!seg && +tr.dataset.i === seg.start));
 }
@@ -1544,6 +1584,205 @@ $('btnCsv').addEventListener('click', () => {
   frames.forEach((f, i) => { const d = metricsCache[i]; rows.push([f.t.toFixed(3), f.src || '', turnArr[i] ?? '', phaseArr[i] ?? ''].concat(METRIC_KEYS.flatMap(k => { const r = d && d.M[k]; return r ? [r.v == null ? '' : r.v.toFixed(2), r.cls, r.conf.toFixed(2)] : ['', '', '']; })).join(',')); });
   download(new Blob(['﻿' + rows.join('\n')], { type: 'text/csv' }), exportName() + '.csv');
 });
+// ========== 3D 表示（人形・板） ==========
+// 3D 源はサーバーの pose3d（拘束付き補正）を優先。無い場合はブラウザ内の簡易版（BlazePose の 3D に膝の過伸展禁止・接地・板接続のみ）。
+const toY = p => Array.isArray(p) ? [p[0], -p[1], -p[2]] : [p.x, -p.y, -p.z];   // BlazePose world → Y 上, Z カメラ側（配列・オブジェクト両対応）
+function buildP3Client() {
+  const n = frames.length; p3Arr = new Array(n).fill(null); p3Source = n ? 'client' : 'none';
+  const floors = [];
+  for (let i = 0; i < n; i++) {
+    const w = worldS[i], f = frames[i], m = metricsCache[i];
+    if (!w || !f.q || !m) { floors.push(null); continue; }
+    const J = w.map(toY);
+    const right = [J[24][0] - J[23][0], 0, J[24][2] - J[23][2]]; const rn = Math.hypot(right[0], right[2]) || 1; right[0] /= rn; right[2] /= rn;
+    const fwd = [-right[2], 0, right[0]];   // up × right
+    let fix = 0;
+    for (const [hip, knee, ank] of [[23, 25, 27], [24, 26, 28]]) {   // 膝の過伸展: 股関節-足首の線より後ろなら前へ鏡映
+      const ha = [J[ank][0] - J[hip][0], J[ank][1] - J[hip][1], J[ank][2] - J[hip][2]]; const l2 = ha[0] ** 2 + ha[1] ** 2 + ha[2] ** 2; if (l2 < 1e-9) continue;
+      const t = ((J[knee][0] - J[hip][0]) * ha[0] + (J[knee][1] - J[hip][1]) * ha[1] + (J[knee][2] - J[hip][2]) * ha[2]) / l2;
+      const foot = [J[hip][0] + ha[0] * t, J[hip][1] + ha[1] * t, J[hip][2] + ha[2] * t]; const d = [J[knee][0] - foot[0], J[knee][1] - foot[1], J[knee][2] - foot[2]];
+      if (d[0] * fwd[0] + d[2] * fwd[2] < -1e-3) { J[knee] = [foot[0] - d[0], foot[1] - d[1], foot[2] - d[2]]; fix += 10; }
+    }
+    let floor = Infinity; for (const k of [27, 28, 29, 30, 31, 32]) floor = Math.min(floor, J[k][1]);
+    floors.push(floor);
+    const qcore = Math.min(f.q[11], f.q[12], f.q[23], f.q[24], f.q[25], f.q[26], f.q[27], f.q[28]);
+    let depth = 0; const bones = [[23, 25], [25, 27], [24, 26], [26, 28], [11, 13], [13, 15], [12, 14], [14, 16]];
+    for (const [a, b] of bones) { const L = Math.hypot(J[b][0] - J[a][0], J[b][1] - J[a][1], J[b][2] - J[a][2]) || 1e-6; depth += Math.abs(J[b][2] - J[a][2]) / L; } depth /= bones.length;
+    const ski = {};
+    for (const [key, ank, heel, toe] of [['L', 27, 29, 31], ['R', 28, 30, 32]]) {
+      const boot = [(J[ank][0] + J[heel][0] + J[toe][0]) / 3, (J[ank][1] + J[heel][1] + J[toe][1]) / 3, (J[ank][2] + J[heel][2] + J[toe][2]) / 3];
+      let fd = [J[toe][0] - J[heel][0], 0, J[toe][2] - J[heel][2]]; const fl = Math.hypot(fd[0], fd[2]); fd = fl > 1e-6 ? [fd[0] / fl, 0, fd[2] / fl] : fwd.slice();
+      if (fd[0] * fwd[0] + fd[2] * fwd[2] < 0) fd = [-fd[0], 0, -fd[2]];
+      let d = [0.55 * fd[0] + 0.45 * fwd[0], 0, 0.55 * fd[2] + 0.45 * fwd[2]]; const dl = Math.hypot(d[0], d[2]) || 1; d = [d[0] / dl, d[2] / dl];
+      ski[key] = { center: [boot[0], floor, boot[2]], dir: d, len: skiLenM, boot, conf: 0.4 * qcore, src: 'foot+pelvis(簡易)' };
+    }
+    // 根の位置: 画像上の腰中点の移動（カメラ補正なし、見かけ）
+    const hip = m.P2 ? { x: (m.P2[23].x + m.P2[24].x) / 2, y: (m.P2[23].y + m.P2[24].y) / 2 } : null;
+    p3Arr[i] = { joints: J, floor, fwd: [fwd[0], fwd[2]], conf: Math.max(0, Math.min(1, qcore * (f.src === 'interp' ? 0.7 : 1) * (1 - 0.4 * depth) * 0.85)), depth_frac: depth, fix_deg: fix, ski, flags: fix ? ['joint_limit_fixed'] : [], _hip: hip, _BH: m.BH, _view: m.view, _facing: m.facing };
+  }
+  // 地面高の中央値と根の位置
+  const med = arr => { const s = arr.filter(v => v != null).sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+  let x0 = null, y0 = null;
+  for (let i = 0; i < n; i++) {
+    const p = p3Arr[i]; if (!p) continue;
+    p.floor = med(floors.slice(Math.max(0, i - 5), i + 6)); p.ski.L.center[1] = p.floor; p.ski.R.center[1] = p.floor;
+    if (p._hip) { if (x0 == null) { x0 = p._hip.x; y0 = p._hip.y; } const mpp = 1.75 / p._BH, dx = (p._hip.x - x0) * mpp, dy = (p._hip.y - y0) * mpp;
+      p.root = p._view === 'side' ? [dx, 0, 0] : p._view === 'front' ? [dx, 0, dy * 1.5] : p._view === 'back' ? [dx, 0, -dy * 1.5] : [dx, 0, dy]; p.root_conf = 0.3; }
+  }
+}
+let r3 = null, s3 = null, c3 = null, ctl3 = null, fig3 = null, trail3 = { L: [], R: [], C: [] }, view3 = 'free', held3 = false;
+const COL3 = { L: 0xF59E0B, R: 0x38BDF8, C: 0xE2E8F0, COG: 0xEF4444, SKI_L: 0xD97706, SKI_R: 0x0284C7 };
+const BONES3 = [[11, 12, 'C', .05], [23, 24, 'C', .06], [11, 13, 'L', .035], [13, 15, 'L', .03], [12, 14, 'R', .035], [14, 16, 'R', .03], [23, 25, 'L', .06], [25, 27, 'L', .045], [24, 26, 'R', .06], [26, 28, 'R', .045]];
+function makeBone(radius, color) {
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: .6, transparent: true });
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 12), mat), s1 = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat), s2 = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat);
+  s1.scale.setScalar(radius); s2.scale.setScalar(radius); cyl.userData.r = radius; return { cyl, s1, s2, mat };
+}
+function setBone(b, A, B) {
+  const a = new THREE.Vector3(...A), c = new THREE.Vector3(...B), d = c.clone().sub(a), len = d.length();
+  b.cyl.position.copy(a).addScaledVector(d, .5); b.cyl.scale.set(b.cyl.userData.r, Math.max(len, 1e-4), b.cyl.userData.r); b.cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+  b.s1.position.copy(a); b.s2.position.copy(c);
+}
+function init3D() {
+  if (r3) return;
+  const el = $('three3d');
+  r3 = new THREE.WebGLRenderer({ antialias: true }); r3.setPixelRatio(Math.min(devicePixelRatio, 2)); el.appendChild(r3.domElement);
+  s3 = new THREE.Scene(); s3.background = new THREE.Color(0x0B1220);
+  c3 = new THREE.PerspectiveCamera(40, 1, .05, 200);
+  ctl3 = new OrbitControls(c3, r3.domElement); ctl3.enableDamping = true; ctl3.dampingFactor = .12; ctl3.target.set(0, .9, 0);
+  ctl3.addEventListener('start', () => { view3 = 'free'; document.querySelectorAll('.viewbtns button').forEach(b => b.classList.toggle('active', b.dataset.v3 === 'free')); });
+  s3.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.1)); const dl = new THREE.DirectionalLight(0xffffff, 1.1); dl.position.set(2, 5, 3); s3.add(dl);
+  s3.add(new THREE.GridHelper(40, 80, 0x475569, 0x1E293B));
+  const snow = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: 0xE2E8F0, roughness: 1, transparent: true, opacity: .07 })); snow.rotation.x = -Math.PI / 2; snow.position.y = -.001; s3.add(snow);
+  fig3 = new THREE.Group(); s3.add(fig3);
+  fig3.bones = BONES3.map(([a, b, c, r]) => { const bn = makeBone(r, COL3[c]); fig3.add(bn.cyl, bn.s1, bn.s2); return bn; });
+  fig3.torso = makeBone(.085, COL3.C); fig3.add(fig3.torso.cyl, fig3.torso.s1, fig3.torso.s2);
+  fig3.neck = makeBone(.03, COL3.C); fig3.add(fig3.neck.cyl, fig3.neck.s1, fig3.neck.s2);
+  fig3.head = new THREE.Mesh(new THREE.SphereGeometry(.11, 16, 12), new THREE.MeshStandardMaterial({ color: 0xF8FAFC, transparent: true })); fig3.add(fig3.head);
+  const bootGeo = new THREE.BoxGeometry(.11, .14, .32);
+  fig3.bootL = new THREE.Mesh(bootGeo, new THREE.MeshStandardMaterial({ color: 0x111827, transparent: true })); fig3.bootR = new THREE.Mesh(bootGeo, new THREE.MeshStandardMaterial({ color: 0x111827, transparent: true })); fig3.add(fig3.bootL, fig3.bootR);
+  const mkSki = col => { const g = new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(.09, .014, 1), new THREE.MeshStandardMaterial({ color: col, transparent: true })); const tip = new THREE.Mesh(new THREE.BoxGeometry(.09, .014, .12), body.material); tip.position.set(0, .03, .55); tip.rotation.x = -.5; g.add(body, tip); g.body = body; g.tip = tip; return g; };
+  fig3.skiL = mkSki(COL3.SKI_L); fig3.skiR = mkSki(COL3.SKI_R); s3.add(fig3.skiL, fig3.skiR);
+  fig3.cog = new THREE.Mesh(new THREE.SphereGeometry(.05, 16, 12), new THREE.MeshStandardMaterial({ color: COL3.COG, emissive: 0x7F1D1D, transparent: true })); s3.add(fig3.cog);
+  fig3.plumb = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: COL3.COG, dashSize: .05, gapSize: .03 })); s3.add(fig3.plumb);
+  fig3.arrowA = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), .5, 0x34D399, .12, .07); s3.add(fig3.arrowA);
+  fig3.arrowBL = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(), .3, 0x9CA3AF, .08, .06); fig3.arrowBR = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(), .3, 0x9CA3AF, .08, .06); s3.add(fig3.arrowBL, fig3.arrowBR);
+  fig3.trailL = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: COL3.SKI_L, transparent: true, opacity: .8 })); fig3.trailR = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: COL3.SKI_R, transparent: true, opacity: .8 })); fig3.trailC = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: COL3.COG, transparent: true, opacity: .6 }));
+  s3.add(fig3.trailL, fig3.trailR, fig3.trailC);
+  // 撮影方向を示すカメラの印（+Z 側）
+  const camMark = new THREE.Mesh(new THREE.ConeGeometry(.12, .3, 12), new THREE.MeshStandardMaterial({ color: 0x94A3B8 })); camMark.position.set(0, .3, 3.2); camMark.rotation.x = Math.PI / 2; s3.add(camMark); fig3.camMark = camMark;
+  setView3('cam'); view3 = 'free';
+  resize3D();
+  (function loop() { requestAnimationFrame(loop); if (r3 && !$('pane3d').classList.contains('hidden')) { ctl3.update(); r3.render(s3, c3); checkViewBadge(); } })();
+}
+function resize3D() { if (!r3) return; const el = $('three3d'), w = el.clientWidth, h = el.clientHeight || w * .75; if (!w) return; r3.setSize(w, h, true); c3.aspect = w / h; c3.updateProjectionMatrix(); }
+function setView3(v) {
+  view3 = v; if (!c3) return;
+  const p = p3Arr[idx], fwd = p ? new THREE.Vector3(p.fwd[0], 0, p.fwd[1]) : new THREE.Vector3(0, 0, -1), right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+  const root = p && p.root ? new THREE.Vector3(p.root[0], 0, p.root[2]) : new THREE.Vector3();
+  const t = root.clone().add(new THREE.Vector3(0, .9, 0)), r = 3.4;
+  let pos;
+  if (v === 'front') pos = t.clone().addScaledVector(fwd, r).setY(1.1); else if (v === 'back') pos = t.clone().addScaledVector(fwd, -r).setY(1.4);
+  else if (v === 'left') pos = t.clone().addScaledVector(right, -r).setY(1.0); else if (v === 'right') pos = t.clone().addScaledVector(right, r).setY(1.0);
+  else if (v === 'top') pos = t.clone().add(new THREE.Vector3(0.001, r * 1.4, 0)); else if (v === 'cam') pos = t.clone().add(new THREE.Vector3(0, 1.2, r));
+  else return;
+  c3.position.copy(pos); ctl3.target.copy(t); ctl3.update();
+  document.querySelectorAll('.viewbtns button').forEach(b => b.classList.toggle('active', b.dataset.v3 === v));
+}
+function checkViewBadge() {
+  // 視点の方位が撮影方向（+Z）から 30° 以上離れていれば「推定視点」
+  const d = c3.position.clone().sub(ctl3.target); const az = Math.abs(THREE.MathUtils.radToDeg(Math.atan2(d.x, d.z)));
+  const elev = THREE.MathUtils.radToDeg(Math.atan2(d.y, Math.hypot(d.x, d.z)));
+  $('b3view').classList.toggle('hidden', !(az > 30 || elev > 50));
+}
+document.querySelectorAll('.viewbtns button').forEach(b => b.addEventListener('click', () => { if (b.dataset.v3 === 'free') { view3 = 'free'; document.querySelectorAll('.viewbtns button').forEach(x => x.classList.toggle('active', x === b)); } else setView3(b.dataset.v3); }));
+document.querySelectorAll('.t3 button').forEach(b => b.addEventListener('click', () => { const k = b.dataset.s3; show3d[k] = !show3d[k]; b.classList.toggle('on', show3d[k]); update3D(); }));
+function setOpacity3(group, a) { group.traverse(o => { if (o.material && !(o.material instanceof THREE.LineDashedMaterial)) { o.material.transparent = true; o.material.opacity = a; } }); }
+function cog3Of(J) {
+  let x = 0, y = 0, z = 0, M = 0;
+  for (const s of SEG) { const mid = ids => ids.reduce((a, i) => [a[0] + J[i][0] / ids.length, a[1] + J[i][1] / ids.length, a[2] + J[i][2] / ids.length], [0, 0, 0]); const A = mid(s.a), B = mid(s.b); x += s.m * (A[0] + (B[0] - A[0]) * s.f); y += s.m * (A[1] + (B[1] - A[1]) * s.f); z += s.m * (A[2] + (B[2] - A[2]) * s.f); M += s.m; }
+  return [x / M, y / M, z / M];
+}
+function update3D() {
+  if ($('pane3d').classList.contains('hidden')) return;
+  init3D();
+  let p = p3Arr[idx]; held3 = false;
+  if (!p) { for (let k = idx - 1; k >= Math.max(0, idx - 30); k--) if (p3Arr[k]) { p = p3Arr[k]; held3 = true; break; } }
+  const vis = !!p;
+  [fig3, fig3.skiL, fig3.skiR, fig3.cog, fig3.plumb, fig3.arrowA, fig3.arrowBL, fig3.arrowBR].forEach(o => o.visible = vis);
+  $('b3source').textContent = p3Source === 'server' ? '3D: サーバー（拘束付き補正）' : p3Source === 'client' ? '3D: 簡易（ブラウザ内、BlazePose + 膝・接地の拘束のみ）' : '3D: データなし';
+  if (!p) { $('b3conf').textContent = '未検出'; return; }
+  const root = p.root || [0, 0, 0];
+  const J = p.joints.map(j => [j[0] + root[0], j[1] - p.floor, j[2] + root[2]]);
+  const alpha = held3 ? .3 : p.conf < 0.4 ? .45 : 1;
+  const showFig = show3d.figure && viewMode !== 'skis';
+  fig3.visible = showFig;
+  if (showFig) {
+    fig3.bones.forEach((b, k) => setBone(b, J[BONES3[k][0]], J[BONES3[k][1]]));
+    const pel = [(J[23][0] + J[24][0]) / 2, (J[23][1] + J[24][1]) / 2, (J[23][2] + J[24][2]) / 2], shc = [(J[11][0] + J[12][0]) / 2, (J[11][1] + J[12][1]) / 2, (J[11][2] + J[12][2]) / 2];
+    setBone(fig3.torso, pel, shc);
+    const head = [(J[7][0] + J[8][0]) / 2, (J[7][1] + J[8][1]) / 2 + .03, (J[7][2] + J[8][2]) / 2];
+    setBone(fig3.neck, shc, head); fig3.head.position.set(...head);
+    setOpacity3(fig3, alpha);
+  }
+  // 板とブーツ（板は地面に接地、ブーツは足部に固定）
+  for (const [key, g, boot] of [['L', fig3.skiL, fig3.bootL], ['R', fig3.skiR, fig3.bootR]]) {
+    const sk = p.ski && p.ski[key]; const on = !!sk && show3d.skis;
+    g.visible = on; boot.visible = !!sk && show3d.boots && viewMode !== 'skis' ? true : (!!sk && show3d.boots);
+    if (!sk) continue;
+    const dir = new THREE.Vector3(sk.dir[0], 0, sk.dir[1]).normalize();
+    g.position.set(sk.center[0] + root[0], .007, sk.center[2] + root[2]); g.body.scale.set(1, 1, sk.len); g.tip.position.z = sk.len / 2 + .05;
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir); g.position.addScaledVector(dir, sk.len * 0.08); // ビンディングは中心よりやや後ろ
+    const lowConf = sk.conf < 0.3; g.body.material.color.set(lowConf ? 0x6B7280 : (key === 'L' ? COL3.SKI_L : COL3.SKI_R)); g.body.material.opacity = alpha * (lowConf ? .6 : 1);
+    boot.position.set(sk.boot[0] + root[0], sk.boot[1] - p.floor + .02, sk.boot[2] + root[2]); boot.quaternion.copy(g.quaternion); boot.material.opacity = alpha;
+  }
+  // 重心と垂線
+  const cog = cog3Of(J); fig3.cog.visible = show3d.cog; fig3.plumb.visible = show3d.cog;
+  fig3.cog.position.set(...cog); fig3.plumb.geometry.setFromPoints([new THREE.Vector3(...cog), new THREE.Vector3(cog[0], 0, cog[2])]); fig3.plumb.computeLineDistances(); fig3.cog.material.opacity = alpha;
+  // 矢印: A = 重心移動（根の移動から、画像面の見かけ）、B = 荷重傾向（参考・未検証、灰色）
+  fig3.arrowA.visible = false; fig3.arrowBL.visible = fig3.arrowBR.visible = false;
+  if (show3d.arrows && arrowMode === 'A') {
+    const k = Math.max(1, Math.round(0.08 / (frames.length > 1 ? frames[1].t - frames[0].t : 0.1)));
+    const a = p3Arr[Math.max(0, idx - k)], b = p3Arr[Math.min(frames.length - 1, idx + k)];
+    if (a && b && a.root && b.root && b !== a) {
+      const dtv = (Math.min(frames.length - 1, idx + k) - Math.max(0, idx - k)) * (frames[1].t - frames[0].t);
+      const v = new THREE.Vector3((b.root[0] - a.root[0]) / dtv, 0, (b.root[2] - a.root[2]) / dtv); const sp = v.length();
+      if (sp > 0.05) { fig3.arrowA.visible = true; fig3.arrowA.position.set(...cog); fig3.arrowA.setDirection(v.clone().normalize()); fig3.arrowA.setLength(Math.min(1.2, sp * 0.3), .12, .07);
+        const col = (p.root_conf || 0) < 0.3 ? 0x9CA3AF : sp < 1.5 ? 0x60A5FA : sp < 4 ? 0xFACC15 : 0xEF4444; fig3.arrowA.setColor(col); }
+    }
+  } else if (show3d.arrows && arrowMode === 'B' && tendArr[idx]) {
+    const t = tendArr[idx];
+    for (const [key, ar] of [['L', fig3.arrowBL], ['R', fig3.arrowBR]]) { const sk = p.ski && p.ski[key]; if (!sk) continue; ar.visible = true; ar.position.set(sk.boot[0] + root[0], sk.boot[1] - p.floor + .5 + .4 * t[key], sk.boot[2] + root[2]); ar.setLength(.3 + .5 * t[key], .08, .06); }
+  }
+  // 軌跡（板の中心と重心、直近 120 コマ）
+  if (show3d.trail && !held3) {
+    const push = (arr, v) => { if (!arr.length || arr[arr.length - 1].i !== idx) { arr.push({ i: idx, p: v }); arr.sort((x, y) => x.i - y.i); if (arr.length > 120) arr.shift(); } };
+    if (p.ski && p.ski.L) push(trail3.L, new THREE.Vector3(p.ski.L.center[0] + root[0], .01, p.ski.L.center[2] + root[2]));
+    if (p.ski && p.ski.R) push(trail3.R, new THREE.Vector3(p.ski.R.center[0] + root[0], .01, p.ski.R.center[2] + root[2]));
+    push(trail3.C, new THREE.Vector3(cog[0], .012, cog[2]));
+  }
+  for (const [key, line] of [['L', fig3.trailL], ['R', fig3.trailR], ['C', fig3.trailC]]) { line.visible = show3d.trail; line.geometry.setFromPoints(trail3[key].filter(o => o.i <= idx).map(o => o.p)); }
+  // 信頼度・フラグ
+  const cw = p.conf >= .75 ? '高' : p.conf >= .5 ? '中' : '低';
+  $('b3conf').textContent = `3D 信頼度 ${cw}（${p.conf.toFixed(2)}）${held3 ? '・直前の姿勢を保持' : ''}${p.root_conf != null ? `　移動は画像面の見かけ（信頼度 ${p.root_conf.toFixed(1)}）` : ''}`;
+  const fl = (p.flags || []).map(x => ({ ski_cross: '左右の板が交差（推定の崩れ）', reproj_high: '2D との整合が低い', joint_limit_fixed: '関節可動域で修正' })[x] || x);
+  $('b3flags').textContent = fl.join('／'); $('b3flags').classList.toggle('hidden', !fl.length);
+  if (view3 !== 'free' && show3d.figure) setView3(view3);
+}
+// ---------- 表示モード ----------
+function setViewMode(m) {
+  viewMode = m;
+  document.querySelectorAll('.modebar button[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  const showVideo = m === 'video' || split, show3 = m !== 'video' || split;
+  $('videoPane').classList.toggle('hidden', !showVideo); $('pane3d').classList.toggle('hidden', !show3);
+  $('stage').classList.toggle('split', split && showVideo && show3);
+  if (show3) { init3D(); requestAnimationFrame(() => { resize3D(); update3D(); }); }
+  if (showVideo) requestAnimationFrame(resizeOverlay);
+}
+document.querySelectorAll('.modebar button[data-mode]').forEach(b => b.addEventListener('click', () => setViewMode(b.dataset.mode)));
+$('btnSplit').addEventListener('click', () => { split = !split; $('btnSplit').classList.toggle('on', split); setViewMode(viewMode === 'video' && split ? 'figure' : viewMode); });
+window.addEventListener('resize', resize3D);
+
 // ========== サーバー解析 ==========
 const apiInput = $('apiUrl');
 try { apiInput.value = localStorage.getItem('skiApiUrl') || ''; } catch (e) {}
@@ -1599,6 +1838,7 @@ function loadServerResults(res, job) {
   analyzed = true;
   vecSource = 'server';
   vecArr = res.frames.map(f => f.vec || null); indArr = res.frames.map(f => f.ind || null); tendArr = res.frames.map(f => f.tend || null);
+  p3Arr = res.frames.map(f => f.p3 || null); p3Source = p3Arr.some(Boolean) ? 'server' : 'none'; skiLenM = (res.pose3d && res.pose3d.ski_length_m) || 1.65;
   buildCache();
   res.frames.forEach((f, i) => { if (f.metrics && metricsCache[i]) metricsCache[i].M = f.metrics; });
   updateArrowNote();
