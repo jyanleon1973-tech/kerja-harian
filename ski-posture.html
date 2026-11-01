@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0F172A">
+<title>スキー姿勢 3D 解析</title>
+<style>
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; background:#0F172A; color:#E2E8F0; font-family:-apple-system,'Hiragino Sans','Yu Gothic UI',sans-serif; }
+  body { padding-bottom:env(safe-area-inset-bottom); }
+  header { position:sticky; top:0; z-index:20; background:#1E293B; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #334155; }
+  header h1 { font-size:16px; margin:0; font-weight:700; }
+  header .sub { font-size:11px; color:#94A3B8; }
+  main { max-width:1200px; margin:0 auto; padding:12px; }
+  .card { background:#1E293B; border:1px solid #334155; border-radius:14px; padding:14px; margin-bottom:12px; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:#94A3B8; font-weight:700; letter-spacing:.04em; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  label.lbl { font-size:12px; color:#94A3B8; }
+  select, button, input[type=file] { font-size:14px; }
+  select { background:#0F172A; color:#E2E8F0; border:1px solid #475569; border-radius:8px; padding:7px 10px; }
+  button { background:#334155; color:#E2E8F0; border:none; border-radius:9px; padding:9px 14px; font-weight:600; cursor:pointer; }
+  button.primary { background:#2563EB; color:white; }
+  button.danger { background:#DC2626; color:white; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.small { padding:6px 10px; font-size:12px; }
+  button.active { background:#2563EB; color:white; }
+  .filebtn { display:inline-block; background:#2563EB; color:white; border-radius:9px; padding:9px 14px; font-weight:600; cursor:pointer; }
+  .filebtn input { display:none; }
+  .status { font-size:12px; color:#CBD5E1; margin-top:8px; min-height:16px; }
+  .bar { height:8px; background:#0F172A; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bar > div { height:100%; width:0; background:#22C55E; transition:width .2s; }
+  .panes { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
+  @media (min-width:900px) { .panes { grid-template-columns:1fr 1fr; } }
+  .pane { background:#000; border-radius:14px; overflow:hidden; position:relative; }
+  .videowrap { position:relative; width:100%; }
+  video { display:block; width:100%; height:auto; background:#000; }
+  #overlay { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
+  #three { width:100%; aspect-ratio:4/3; touch-action:none; overflow:hidden; }
+  #three canvas { display:block; }
+  @media (min-width:900px) { #three { aspect-ratio:1/1; } }
+  .pane .tag { position:absolute; left:10px; top:8px; font-size:11px; background:rgba(15,23,42,.7); padding:3px 8px; border-radius:6px; color:#CBD5E1; pointer-events:none; }
+  .viewbtns { position:absolute; right:8px; top:8px; display:flex; flex-direction:column; gap:4px; }
+  .viewbtns button { padding:5px 9px; font-size:11px; background:rgba(30,41,59,.85); }
+  .toggles { position:absolute; left:8px; bottom:8px; display:flex; gap:4px; flex-wrap:wrap; }
+  .toggles button { padding:5px 9px; font-size:11px; background:rgba(30,41,59,.85); }
+  .toggles button.on { background:#2563EB; }
+  .controls { display:flex; flex-direction:column; gap:10px; }
+  input[type=range] { width:100%; accent-color:#3B82F6; }
+  .transport { display:flex; gap:6px; justify-content:center; align-items:center; flex-wrap:wrap; }
+  .transport button { min-width:46px; padding:10px 12px; font-size:16px; }
+  .time { font-variant-numeric:tabular-nums; font-size:13px; color:#94A3B8; text-align:center; }
+  .metrics { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+  @media (min-width:600px) { .metrics { grid-template-columns:repeat(4,1fr); } }
+  .metric { background:#0F172A; border-radius:10px; padding:10px 12px; }
+  .metric .k { font-size:11px; color:#94A3B8; }
+  .metric .v { font-size:22px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .metric .u { font-size:12px; color:#94A3B8; font-weight:500; margin-left:2px; }
+  .metric .d { font-size:11px; color:#64748B; margin-top:2px; }
+  .note { font-size:11px; color:#64748B; line-height:1.6; }
+  .hidden { display:none !important; }
+  .warn { color:#FCA5A5; }
+  .legend { display:flex; gap:12px; font-size:11px; color:#94A3B8; flex-wrap:wrap; margin-top:8px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <div>
+    <h1>スキー姿勢 3D 解析</h1>
+    <div class="sub">動画は端末内で処理されます（外部に送信しません）</div>
+  </div>
+  <button id="btnExport" class="small hidden">JSON保存</button>
+</header>
+
+<main>
+  <section class="card" id="setup">
+    <h2>1. 動画を選ぶ</h2>
+    <div class="row">
+      <label class="filebtn">動画を選択 <input type="file" id="file" accept="video/*"></label>
+      <span id="fileName" class="status" style="margin:0"></span>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label class="lbl">精度
+        <select id="model">
+          <option value="lite">軽量（速い）</option>
+          <option value="full" selected>標準</option>
+          <option value="heavy">高精度（遅い）</option>
+        </select>
+      </label>
+      <label class="lbl">解析コマ数
+        <select id="fps">
+          <option value="10">10 /秒</option>
+          <option value="15" selected>15 /秒</option>
+          <option value="30">30 /秒</option>
+        </select>
+      </label>
+      <label class="lbl">範囲
+        <select id="range">
+          <option value="all" selected>全体</option>
+          <option value="30">最初の30秒</option>
+          <option value="60">最初の60秒</option>
+        </select>
+      </label>
+      <button id="btnAnalyze" class="primary" disabled>解析開始</button>
+      <button id="btnAbort" class="danger hidden">中止</button>
+    </div>
+    <div class="bar"><div id="prog"></div></div>
+    <div class="status" id="status">動画を選んでください。1人が大きく映っている横または斜め前からの固定カメラ映像が最も精度が出ます。</div>
+  </section>
+
+  <section id="viewer" class="hidden">
+    <div class="panes">
+      <div class="pane">
+        <div class="videowrap">
+          <video id="video" playsinline muted preload="auto"></video>
+          <canvas id="overlay"></canvas>
+        </div>
+        <div class="tag">元動画 + 検出骨格</div>
+      </div>
+      <div class="pane">
+        <div id="three"></div>
+        <div class="tag">3D（ドラッグで回転 / ピンチで拡大）</div>
+        <div class="viewbtns">
+          <button data-view="cam">カメラ</button>
+          <button data-view="side">横</button>
+          <button data-view="front">正面</button>
+          <button data-view="back">後ろ</button>
+          <button data-view="top">真上</button>
+        </div>
+        <div class="toggles">
+          <button data-tg="cog" class="on">重心</button>
+          <button data-tg="ski" class="on">板(推定)</button>
+          <button data-tg="trail">重心軌跡</button>
+          <button data-tg="smooth" class="on">平滑化</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card controls" style="margin-top:12px">
+      <input type="range" id="slider" min="0" max="0" value="0" step="1">
+      <div class="time" id="time">0.00 s / 0.00 s　(0 / 0)</div>
+      <div class="transport">
+        <button id="btnFirst" title="最初へ">⏮</button>
+        <button id="btnPrev" title="1コマ戻る">◀︎</button>
+        <button id="btnPlay" class="primary" title="再生 / 停止" style="min-width:70px">▶︎</button>
+        <button id="btnNext" title="1コマ進む">▶︎|</button>
+        <button id="btnLast" title="最後へ">⏭</button>
+        <select id="speed">
+          <option value="0.1">0.1x</option>
+          <option value="0.25" selected>0.25x</option>
+          <option value="0.5">0.5x</option>
+          <option value="1">1x</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>姿勢データ（このコマ）</h2>
+      <div class="metrics" id="metrics"></div>
+      <div class="legend">
+        <span><i style="background:#EF4444"></i>重心（赤）と垂線</span>
+        <span><i style="background:#22C55E"></i>両足の中心（緑）</span>
+        <span><i style="background:#F59E0B"></i>左足・板</span>
+        <span><i style="background:#38BDF8"></i>右足・板</span>
+      </div>
+      <p class="note" style="margin:10px 0 0">
+        重心は関節位置と標準的な人体部位の質量比（de Leva）から推定した「姿勢上の重心」です。板への実際の荷重ではありません。
+        板の向きはかかとからつま先の向きで代用した推定値です。1台のカメラからの奥行きは近似のため、角度は数度の誤差を含みます。
+        撮影条件は、固定カメラ・真横または斜め前・人物が画面の1/3以上の大きさが目安です。
+      </p>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FilesetResolver, PoseLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), octx = overlay.getContext('2d');
+const statusEl = $('status'), progEl = $('prog');
+
+// ---------- 状態 ----------
+let landmarker = null, landmarkerModel = null;
+let frames = [];          // {t, lm (2D正規化), world (3D m)}
+let worldSmooth = [];     // 平滑化した world
+let idx = -1, playing = false, abortFlag = false;
+let lastTs = 0; // detectForVideo のタイムスタンプは単調増加が必要（再解析時も）
+const show = { cog:true, ski:true, trail:false, smooth:true };
+
+// ---------- MediaPipe 設定 ----------
+const MODEL_URL = {
+  lite:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
+  full:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task',
+  heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task',
+};
+async function getLandmarker(model) {
+  if (landmarker && landmarkerModel === model) return landmarker;
+  if (landmarker) { landmarker.close(); landmarker = null; }
+  setStatus('AIモデルを読み込み中…（初回は数MBのダウンロードがあります）');
+  const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  const make = delegate => PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: MODEL_URL[model], delegate },
+    runningMode: 'VIDEO', numPoses: 1,
+    minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+  });
+  try { landmarker = await make('GPU'); }
+  catch (e) { console.warn('GPU delegate failed, fallback to CPU', e); landmarker = await make('CPU'); }
+  landmarkerModel = model;
+  return landmarker;
+}
+
+// ---------- 動画読み込み ----------
+let objectUrl = null;
+$('file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(f);
+  $('fileName').textContent = f.name;
+  video.src = objectUrl;
+  frames = []; worldSmooth = []; idx = -1;
+  $('viewer').classList.add('hidden'); $('btnExport').classList.add('hidden');
+  video.addEventListener('loadedmetadata', () => {
+    $('btnAnalyze').disabled = false;
+    setStatus(`読み込み完了: ${video.videoWidth}×${video.videoHeight}, ${video.duration.toFixed(1)} 秒。「解析開始」を押してください。`);
+    resizeOverlay();
+  }, { once: true });
+  video.addEventListener('error', () => setStatus('この動画はブラウザで再生できない形式です。別の形式（MP4/MOV）をお試しください。', true));
+});
+
+function setStatus(msg, warn=false) { statusEl.textContent = msg; statusEl.classList.toggle('warn', warn); }
+
+function seekTo(t) {
+  return new Promise(res => {
+    if (Math.abs(video.currentTime - t) < 0.0005) return res();
+    const h = () => { video.removeEventListener('seeked', h); res(); };
+    video.addEventListener('seeked', h);
+    video.currentTime = t;
+  });
+}
+const nextPaint = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+// ---------- 解析 ----------
+$('btnAnalyze').addEventListener('click', analyze);
+$('btnAbort').addEventListener('click', () => { abortFlag = true; });
+
+async function analyze() {
+  abortFlag = false;
+  $('btnAnalyze').disabled = true; $('btnAbort').classList.remove('hidden');
+  $('file').disabled = true;
+  try {
+    const lm = await getLandmarker($('model').value);
+    const fps = +$('fps').value, dt = 1 / fps;
+    const rangeV = $('range').value;
+    const end = rangeV === 'all' ? video.duration : Math.min(video.duration, +rangeV);
+    const total = Math.floor(end / dt);
+    video.pause();
+    frames = [];
+    const t0 = performance.now(), tsBase = lastTs + 1;
+    for (let i = 0; i < total; i++) {
+      if (abortFlag) break;
+      const t = i * dt;
+      await seekTo(t);
+      await nextPaint();
+      let r;
+      const ts = tsBase + Math.round(t * 1000); lastTs = ts;
+      try { r = lm.detectForVideo(video, ts); }
+      catch (e) { console.warn(e); r = null; }
+      frames.push({ t, lm: r && r.landmarks[0] || null, world: r && r.worldLandmarks[0] || null });
+      if (i % 2 === 0) {
+        const el = (performance.now() - t0) / 1000, eta = el / (i + 1) * (total - i - 1);
+        progEl.style.width = (100 * (i + 1) / total).toFixed(1) + '%';
+        setStatus(`解析中 ${i + 1} / ${total} コマ　残り約 ${Math.ceil(eta)} 秒`);
+      }
+    }
+    const detected = frames.filter(f => f.world).length;
+    if (!frames.length) { setStatus('解析できませんでした。', true); return; }
+    buildSmooth();
+    progEl.style.width = '100%';
+    setStatus(`解析完了: ${frames.length} コマ中 ${detected} コマで人物を検出${abortFlag ? '（途中で中止）' : ''}。`,
+      detected < frames.length * 0.5);
+    $('viewer').classList.remove('hidden'); $('btnExport').classList.remove('hidden');
+    $('slider').max = frames.length - 1;
+    initThree();
+    resizeOverlay();
+    await seekTo(0);
+    setIndex(0);
+    $('viewer').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    console.error(e);
+    setStatus('エラー: ' + (e && e.message || e), true);
+  } finally {
+    $('btnAnalyze').disabled = false; $('btnAbort').classList.add('hidden'); $('file').disabled = false;
+  }
+}
+
+// 3フレーム移動平均（検出なしのコマは飛ばす）
+function buildSmooth() {
+  worldSmooth = frames.map((f, i) => {
+    if (!f.world) return null;
+    const nb = [frames[i - 1], f, frames[i + 1]].filter(x => x && x.world).map(x => x.world);
+    return f.world.map((p, j) => {
+      let x = 0, y = 0, z = 0;
+      for (const w of nb) { x += w[j].x; y += w[j].y; z += w[j].z; }
+      return { x: x / nb.length, y: y / nb.length, z: z / nb.length, visibility: p.visibility };
+    });
+  });
+}
+
+// ---------- 2D オーバーレイ ----------
+const CONN = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[27,31],[28,30],[30,32],[28,32]];
+function resizeOverlay() {
+  const r = video.getBoundingClientRect();
+  overlay.width = Math.round(r.width * devicePixelRatio); overlay.height = Math.round(r.height * devicePixelRatio);
+  drawOverlay();
+}
+window.addEventListener('resize', () => { resizeOverlay(); resizeThree(); });
+function drawOverlay() {
+  const W = overlay.width, H = overlay.height;
+  octx.clearRect(0, 0, W, H);
+  const f = frames[idx]; if (!f || !f.lm) return;
+  const P = f.lm.map(p => [p.x * W, p.y * H, p.visibility ?? 1]);
+  octx.lineWidth = 3 * devicePixelRatio; octx.lineCap = 'round';
+  for (const [a, b] of CONN) {
+    if (P[a][2] < 0.3 || P[b][2] < 0.3) continue;
+    const left = (a % 2 === 1);
+    octx.strokeStyle = left ? 'rgba(245,158,11,.9)' : 'rgba(56,189,248,.9)';
+    octx.beginPath(); octx.moveTo(P[a][0], P[a][1]); octx.lineTo(P[b][0], P[b][1]); octx.stroke();
+  }
+  octx.fillStyle = 'white';
+  for (let i = 11; i < 33; i++) { if (P[i][2] < 0.3) continue; octx.beginPath(); octx.arc(P[i][0], P[i][1], 3.5 * devicePixelRatio, 0, Math.PI * 2); octx.fill(); }
+  // 2D 重心（画像座標で簡易表示）
+  const cog2 = cogOf(f.lm.map(p => ({ x: p.x * W, y: p.y * H, z: 0 })));
+  if (cog2 && show.cog) {
+    octx.fillStyle = '#EF4444'; octx.beginPath(); octx.arc(cog2.x, cog2.y, 7 * devicePixelRatio, 0, Math.PI * 2); octx.fill();
+    octx.strokeStyle = 'rgba(239,68,68,.8)'; octx.setLineDash([6 * devicePixelRatio, 6 * devicePixelRatio]);
+    octx.beginPath(); octx.moveTo(cog2.x, cog2.y); octx.lineTo(cog2.x, H); octx.stroke(); octx.setLineDash([]);
+  }
+}
+
+// ---------- 重心 (de Leva 部位質量比) ----------
+const SEG = [
+  { m:0.081,  a:[7,8],   b:[7,8],   f:0.5 },    // 頭 (耳の中点)
+  { m:0.497,  a:[11,12], b:[23,24], f:0.5 },    // 体幹
+  { m:0.028,  a:[11], b:[13], f:0.436 }, { m:0.028, a:[12], b:[14], f:0.436 }, // 上腕
+  { m:0.016,  a:[13], b:[15], f:0.430 }, { m:0.016, a:[14], b:[16], f:0.430 }, // 前腕
+  { m:0.006,  a:[15], b:[19], f:0.5 },   { m:0.006, a:[16], b:[20], f:0.5 },   // 手
+  { m:0.100,  a:[23], b:[25], f:0.433 }, { m:0.100, a:[24], b:[26], f:0.433 }, // 大腿
+  { m:0.0465, a:[25], b:[27], f:0.433 }, { m:0.0465,a:[26], b:[28], f:0.433 }, // 下腿
+  { m:0.0145, a:[29], b:[31], f:0.5 },   { m:0.0145,a:[30], b:[32], f:0.5 },   // 足
+];
+const mid = (P, ids) => { let x=0,y=0,z=0; for (const i of ids){x+=P[i].x;y+=P[i].y;z+=P[i].z;} const n=ids.length; return {x:x/n,y:y/n,z:z/n}; };
+function cogOf(P) {
+  if (!P) return null;
+  let x=0,y=0,z=0,M=0;
+  for (const s of SEG) {
+    const A = mid(P, s.a), B = mid(P, s.b);
+    x += s.m*(A.x+(B.x-A.x)*s.f); y += s.m*(A.y+(B.y-A.y)*s.f); z += s.m*(A.z+(B.z-A.z)*s.f); M += s.m;
+  }
+  return { x:x/M, y:y/M, z:z/M };
+}
+
+// ---------- 3D 座標系と指標 ----------
+// MediaPipe world: x右, y下, z奥行き(手前が負)。Three: X右, Y上, Z手前 に変換
+const toV = p => new THREE.Vector3(p.x, -p.y, -p.z);
+const UP = new THREE.Vector3(0,1,0);
+function poseData(i) {
+  const w = show.smooth ? worldSmooth[i] : frames[i]?.world;
+  if (!w) return null;
+  const P = w.map(toV);
+  // 足の最下点を地面(Y=0)に合わせる
+  let floor = Infinity; for (let k=27;k<=32;k++) floor = Math.min(floor, P[k].y);
+  for (const v of P) v.y -= floor;
+  const cog = toV(cogOf(w)); cog.y -= floor;
+  const feet = new THREE.Vector3(); for (let k=27;k<=32;k++) feet.add(P[k]); feet.multiplyScalar(1/6);
+  // 進行方向（かかと→つま先の平均、水平成分）
+  const fwdL = P[31].clone().sub(P[29]), fwdR = P[32].clone().sub(P[30]);
+  const fwd = fwdL.add(fwdR); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0,0,-1); fwd.normalize();
+  const lat = new THREE.Vector3().crossVectors(UP, fwd).normalize(); // スキーヤーから見て左向き
+  const hipMid = P[23].clone().add(P[24]).multiplyScalar(.5);
+  const shMid = P[11].clone().add(P[12]).multiplyScalar(.5);
+  const trunk = shMid.clone().sub(hipMid);
+  const inPlane = (v, axis) => { // 鉛直と axis の張る面に投影して、鉛直からの角度（符号は axis 方向が正）
+    const a = v.dot(axis), b = v.dot(UP); return THREE.MathUtils.radToDeg(Math.atan2(a, b));
+  };
+  const d = cog.clone().sub(feet); d.y = 0;
+  const ang = (A,B,C) => { const u=A.clone().sub(B), v=C.clone().sub(B); return THREE.MathUtils.radToDeg(u.angleTo(v)); };
+  const line = cog.clone().sub(feet);
+  return {
+    P, cog, feet, fwd, lat, floor,
+    cogFwd: d.dot(fwd)*100, cogLat: -d.dot(lat)*100,          // cm, 左右は右が正
+    lean: -inPlane(line, lat),                                 // 内傾角: 右へ傾くと正
+    trunkFwd: inPlane(trunk, fwd),                             // 前傾角
+    trunkLat: -inPlane(trunk, lat),                            // 上体の左右傾き
+    kneeL: ang(P[23],P[25],P[27]), kneeR: ang(P[24],P[26],P[28]),
+    hipH: hipMid.y*100,
+  };
+}
+
+// ---------- Three.js ----------
+let renderer, scene, camera, controls, fig = null, trailLine, trailPts = [];
+const COL = { L:0xF59E0B, R:0x38BDF8, C:0xE2E8F0, COG:0xEF4444, FEET:0x22C55E };
+const BONES = [[11,12,'C'],[11,13,'L'],[13,15,'L'],[12,14,'R'],[14,16,'R'],[11,23,'L'],[12,24,'R'],[23,24,'C'],
+  [23,25,'L'],[25,27,'L'],[24,26,'R'],[26,28,'R'],[27,29,'L'],[29,31,'L'],[27,31,'L'],[28,30,'R'],[30,32,'R'],[28,32,'R']];
+function initThree() {
+  if (renderer) return;
+  const el = $('three');
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  el.appendChild(renderer.domElement);
+  scene = new THREE.Scene(); scene.background = new THREE.Color(0x0B1220);
+  camera = new THREE.PerspectiveCamera(40, 1, 0.05, 100);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0.9, 0); controls.enableDamping = true; controls.dampingFactor = .12;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.1));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.2); dl.position.set(2,4,3); scene.add(dl);
+  const grid = new THREE.GridHelper(6, 24, 0x475569, 0x1E293B); scene.add(grid);
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(6,6), new THREE.MeshStandardMaterial({ color:0xE2E8F0, roughness:1, transparent:true, opacity:.08 }));
+  plane.rotation.x = -Math.PI/2; plane.position.y = -0.001; scene.add(plane);
+
+  fig = new THREE.Group(); scene.add(fig);
+  const sph = new THREE.SphereGeometry(1, 14, 10), cyl = new THREE.CylinderGeometry(1,1,1,10);
+  fig.joints = []; for (let i=0;i<33;i++){ const m = new THREE.Mesh(sph, new THREE.MeshStandardMaterial({ color:0xF8FAFC })); m.scale.setScalar(.03); m.visible = i>=11; fig.add(m); fig.joints.push(m); }
+  fig.bones = BONES.map(([a,b,c]) => { const m = new THREE.Mesh(cyl, new THREE.MeshStandardMaterial({ color:COL[c] })); fig.add(m); return m; });
+  fig.head = new THREE.Mesh(sph, new THREE.MeshStandardMaterial({ color:0xF8FAFC })); fig.head.scale.setScalar(.1); fig.add(fig.head);
+  fig.neck = new THREE.Mesh(cyl, new THREE.MeshStandardMaterial({ color:COL.C })); fig.add(fig.neck);
+  fig.cog = new THREE.Mesh(sph, new THREE.MeshStandardMaterial({ color:COL.COG, emissive:0x7F1D1D })); fig.cog.scale.setScalar(.05); fig.add(fig.cog);
+  fig.cogLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color:COL.COG, dashSize:.05, gapSize:.03 })); fig.add(fig.cogLine);
+  fig.cogGround = new THREE.Mesh(new THREE.RingGeometry(.03,.05,24), new THREE.MeshBasicMaterial({ color:COL.COG, side:THREE.DoubleSide })); fig.cogGround.rotation.x = -Math.PI/2; fig.add(fig.cogGround);
+  fig.feet = new THREE.Mesh(new THREE.RingGeometry(.03,.05,24), new THREE.MeshBasicMaterial({ color:COL.FEET, side:THREE.DoubleSide })); fig.feet.rotation.x = -Math.PI/2; fig.add(fig.feet);
+  fig.fwdArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(), .4, COL.FEET, .08, .05); fig.add(fig.fwdArrow);
+  const skiGeo = new THREE.BoxGeometry(.09, .012, 1.7);
+  fig.skiL = new THREE.Mesh(skiGeo, new THREE.MeshStandardMaterial({ color:COL.L, transparent:true, opacity:.75 })); fig.add(fig.skiL);
+  fig.skiR = new THREE.Mesh(skiGeo, new THREE.MeshStandardMaterial({ color:COL.R, transparent:true, opacity:.75 })); fig.add(fig.skiR);
+  trailLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color:COL.COG, transparent:true, opacity:.7 })); scene.add(trailLine);
+
+  setView('cam');
+  resizeThree();
+  (function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+}
+function resizeThree() {
+  if (!renderer) return;
+  const el = $('three'), w = el.clientWidth, h = el.clientHeight || w * .75;
+  renderer.setSize(w, h, true); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+function setView(v) {
+  const t = new THREE.Vector3(0, .9, 0), r = 3.2;
+  const pos = { cam:[0.0,1.2,r], side:[r,1.0,0], front:[0,1.0,-r], back:[0,1.6,r*0.9], top:[0.001,r*1.3,0] }[v];
+  camera.position.set(...pos); controls.target.copy(t); controls.update();
+  document.querySelectorAll('.viewbtns button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+}
+document.querySelectorAll('.viewbtns button').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+document.querySelectorAll('.toggles button').forEach(b => b.addEventListener('click', () => {
+  const k = b.dataset.tg; show[k] = !show[k]; b.classList.toggle('on', show[k]);
+  if (k === 'trail' && !show.trail) { trailPts = []; trailLine.geometry.setFromPoints([]); }
+  update3D(); drawOverlay(); updateMetrics();
+}));
+
+function setCyl(mesh, a, b, rad) {
+  const d = b.clone().sub(a), len = d.length();
+  mesh.position.copy(a).addScaledVector(d, .5);
+  mesh.scale.set(rad, Math.max(len, 1e-4), rad);
+  mesh.quaternion.setFromUnitVectors(UP, d.normalize());
+}
+function placeSki(mesh, ankle, heel, toe, fwd) {
+  let dir = toe.clone().sub(heel); dir.y = 0;
+  if (dir.lengthSq() < 1e-6) dir = fwd.clone(); dir.normalize();
+  const center = ankle.clone(); center.y = .006; center.addScaledVector(dir, .15); // ビンディングは板の中心やや後ろ
+  mesh.position.copy(center);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), dir);
+}
+function update3D() {
+  if (!fig) return;
+  const d = poseData(idx);
+  fig.visible = !!d; if (!d) return;
+  const { P, cog, feet, fwd } = d;
+  P.forEach((v, i) => fig.joints[i].position.copy(v));
+  fig.bones.forEach((m, k) => setCyl(m, P[BONES[k][0]], P[BONES[k][1]], .022));
+  const headC = P[7].clone().add(P[8]).multiplyScalar(.5), sh = P[11].clone().add(P[12]).multiplyScalar(.5);
+  fig.head.position.copy(headC); setCyl(fig.neck, sh, headC, .02);
+  fig.cog.visible = fig.cogLine.visible = fig.cogGround.visible = fig.feet.visible = fig.fwdArrow.visible = show.cog;
+  fig.cog.position.copy(cog);
+  fig.cogLine.geometry.setFromPoints([cog, new THREE.Vector3(cog.x, 0, cog.z)]); fig.cogLine.computeLineDistances();
+  fig.cogGround.position.set(cog.x, .002, cog.z);
+  fig.feet.position.set(feet.x, .003, feet.z);
+  fig.fwdArrow.position.set(feet.x, .01, feet.z); fig.fwdArrow.setDirection(fwd);
+  fig.skiL.visible = fig.skiR.visible = show.ski;
+  placeSki(fig.skiL, P[27], P[29], P[31], fwd); placeSki(fig.skiR, P[28], P[30], P[32], fwd);
+  if (show.trail) {
+    const last = trailPts[trailPts.length-1];
+    if (!last || last.i !== idx) { trailPts.push({ i:idx, p:cog.clone() }); if (trailPts.length > 150) trailPts.shift(); trailLine.geometry.setFromPoints(trailPts.map(o => o.p)); }
+  }
+}
+
+// ---------- 指標表示 ----------
+const METRICS = [
+  { k:'重心 前後', f:d => d.cogFwd, u:'cm', s:v => v >= 0 ? '前寄り' : '後ろ寄り', d:'両足中心からの距離' },
+  { k:'重心 左右', f:d => d.cogLat, u:'cm', s:v => v >= 0 ? '右寄り' : '左寄り', d:'両足中心からの距離' },
+  { k:'内傾角', f:d => d.lean, u:'°', s:v => v >= 0 ? '右へ' : '左へ', d:'足元→重心の線と鉛直の角' },
+  { k:'前傾角', f:d => d.trunkFwd, u:'°', s:v => v >= 0 ? '前傾' : '後傾', d:'上体(腰→肩)と鉛直の角' },
+  { k:'上体 左右', f:d => d.trunkLat, u:'°', s:v => v >= 0 ? '右へ' : '左へ', d:'上体の横方向の傾き' },
+  { k:'膝 左', f:d => d.kneeL, u:'°', s:() => '180°で伸びきり', d:'股関節-膝-足首' },
+  { k:'膝 右', f:d => d.kneeR, u:'°', s:() => '180°で伸びきり', d:'股関節-膝-足首' },
+  { k:'腰の高さ', f:d => d.hipH, u:'cm', s:() => '足元から', d:'低いほど沈み込み' },
+];
+const metricsEl = $('metrics');
+metricsEl.innerHTML = METRICS.map((m,i) => `<div class="metric"><div class="k">${m.k}</div><div class="v"><span id="mv${i}">–</span><span class="u">${m.u}</span></div><div class="d" id="md${i}">${m.d}</div></div>`).join('');
+function updateMetrics() {
+  const d = poseData(idx);
+  METRICS.forEach((m,i) => {
+    const v = d ? m.f(d) : null;
+    $('mv'+i).textContent = v == null ? '–' : (Math.abs(v) < 100 ? v.toFixed(1) : Math.round(v));
+    $('md'+i).textContent = v == null ? '検出なし' : `${m.s(v)}　${m.d}`;
+  });
+}
+
+// ---------- 再生・コマ送り ----------
+const slider = $('slider');
+function setIndex(i, seek=true) {
+  if (!frames.length) return;
+  i = Math.max(0, Math.min(frames.length-1, i));
+  idx = i; slider.value = i;
+  $('time').textContent = `${frames[i].t.toFixed(2)} s / ${video.duration.toFixed(2)} s　(${i+1} / ${frames.length})`;
+  if (seek && Math.abs(video.currentTime - frames[i].t) > 0.001) video.currentTime = frames[i].t;
+  drawOverlay(); update3D(); updateMetrics();
+}
+function nearestIndex(t) {
+  const dt = frames.length > 1 ? frames[1].t - frames[0].t : 1;
+  return Math.max(0, Math.min(frames.length-1, Math.round(t / dt)));
+}
+slider.addEventListener('input', () => { pause(); setIndex(+slider.value); });
+$('btnFirst').addEventListener('click', () => { pause(); setIndex(0); });
+$('btnLast').addEventListener('click', () => { pause(); setIndex(frames.length-1); });
+$('btnPrev').addEventListener('click', () => { pause(); setIndex(idx-1); });
+$('btnNext').addEventListener('click', () => { pause(); setIndex(idx+1); });
+$('btnPlay').addEventListener('click', () => playing ? pause() : play());
+$('speed').addEventListener('change', () => { video.playbackRate = +$('speed').value; });
+function play() {
+  if (!frames.length) return;
+  const endT = frames[frames.length-1].t;
+  if (video.currentTime >= endT - 0.01) video.currentTime = 0;
+  video.playbackRate = +$('speed').value;
+  video.play().then(() => { playing = true; $('btnPlay').textContent = '❚❚'; tick(); }).catch(e => setStatus('再生できません: ' + e.message, true));
+}
+function pause() { video.pause(); playing = false; $('btnPlay').textContent = '▶︎'; }
+function tick() {
+  if (!playing) return;
+  const endT = frames[frames.length-1].t;
+  if (video.currentTime >= endT || video.ended) { pause(); setIndex(frames.length-1, false); return; }
+  const i = nearestIndex(video.currentTime);
+  if (i !== idx) setIndex(i, false);
+  requestAnimationFrame(tick);
+}
+video.addEventListener('seeked', () => { if (!playing && frames.length) { const i = nearestIndex(video.currentTime); if (i !== idx) setIndex(i, false); } });
+document.addEventListener('keydown', e => {
+  if (!frames.length || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowRight') { pause(); setIndex(idx+1); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft') { pause(); setIndex(idx-1); e.preventDefault(); }
+  else if (e.key === ' ') { playing ? pause() : play(); e.preventDefault(); }
+});
+
+// ---------- 書き出し ----------
+$('btnExport').addEventListener('click', () => {
+  const data = frames.map((f,i) => { const d = poseData(i); return { t:f.t, detected:!!f.world, world:f.world,
+    metrics: d ? { cogFwd:d.cogFwd, cogLat:d.cogLat, lean:d.lean, trunkFwd:d.trunkFwd, trunkLat:d.trunkLat, kneeL:d.kneeL, kneeR:d.kneeR, hipH:d.hipH } : null }; });
+  const blob = new Blob([JSON.stringify({ source:$('fileName').textContent, fps:+$('fps').value, model:$('model').value, frames:data })], { type:'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = ($('fileName').textContent || 'ski') + '.pose.json'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+});
+</script>
+</body>
+</html>
