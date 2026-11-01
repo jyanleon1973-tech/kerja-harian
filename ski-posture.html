@@ -195,6 +195,12 @@
         <button data-ov="ski" class="on">板</button>
         <button data-ov="text" class="on">数値</button>
         <button data-ov="unsure" class="on">不確実も薄く表示</button>
+        <select id="arrowMode" title="矢印の表示モード" style="font-size:11px; padding:4px 6px">
+          <option value="none">矢印なし</option>
+          <option value="A" selected>A: 重心移動（推定）</option>
+          <option value="B">B: 荷重傾向（参考・未検証）</option>
+          <option value="C" disabled>C: 接触反力（使用不可）</option>
+        </select>
         <button id="btnVideoExport">骨格入り動画を保存</button>
       </div>
     </div>
@@ -202,6 +208,15 @@
     <div class="card controls ao" style="margin-top:12px">
       <div class="exportbar hidden" id="exportBar"><span id="exportMsg"></span> <button id="btnExportAbort" class="small danger">中止</button></div>
       <input type="range" id="slider" min="0" max="0" value="0" step="1">
+      <div class="row" style="gap:10px">
+        <label class="lbl">グラフ
+          <select id="graphSet" style="font-size:12px; padding:4px 8px">
+            <option value="posture" selected>姿勢（撮影方向に応じた指標）</option>
+            <option value="motion">身体運動指標（荷重ではない）</option>
+          </select>
+        </label>
+        <span class="note" id="arrowNote"></span>
+      </div>
       <canvas id="graph" title="タップした位置へ移動"></canvas>
       <div class="legend" id="graphLegend"></div>
       <div class="time" id="time">0.00 s / 0.00 s　(0 / 0)</div>
@@ -251,6 +266,11 @@
     <div class="card ao">
       <h2>ターンごとの集計と左右差</h2>
       <div class="tablewrap" id="turnTable"></div>
+      <div class="row" style="margin-top:10px">
+        <label class="filebtn" style="background:#334155">参照データ（結果 JSON）を読み込んで比較 <input type="file" id="refFile" accept="application/json,.json"></label>
+        <span class="note" id="refNote">参照データは、権利を確認した映像を本アプリで解析して保存した JSON（例: WC 選手の滑り）です。同じ撮影方向・同じターン局面でのみ数値を並べます。参照選手を唯一の正解としないでください。</span>
+      </div>
+      <div class="tablewrap" id="refTable" style="margin-top:8px"></div>
       <p class="note" style="margin:8px 0 0">ターン方向は 3D 推定の骨盤の向きの回り方から判定した推定値です。ターン局面（前半・中盤・後半）は各ターンの時間を 3 等分したものです。行をタップするとそのターンの先頭に移動します。</p>
     </div>
 
@@ -287,6 +307,9 @@ let viewInfo = { view: 'unknown', auto: 'unknown', facing: 'toward', ratio: 0 };
 const ov = { skel:true, lines:true, cog:true, ski:true, text:true, unsure:true };
 const tilt = { pitch: 0, roll: 0 };
 const region = { inIdx: null, outIdx: null, loop: false };
+let arrowMode = 'A';               // none | A | B（C は使用不可）
+let vecArr = [], indArr = [], tendArr = [], vecSource = 'client';  // 運動ベクトル・身体運動指標・荷重傾向（未検証）
+let refData = null;                // 比較用の参照データ
 const QMIN = 0.5;      // これ未満の関節は「不確実」
 const SKI_MIN = 0.55;  // これ未満の板検出は「未検出」扱い
 
@@ -337,6 +360,7 @@ $('file').addEventListener('change', e => {
   video.addEventListener('error', () => setStatus('この動画はブラウザで再生できない形式です。別の形式（MP4/MOV）をお試しください。', true));
 });
 function resetAnalysis() {
+  vecSource = 'client'; vecArr = []; indArr = []; tendArr = [];
   frames = []; lmS = []; worldS = []; fwdArr = []; turnArr = []; phaseArr = []; segments = []; floorArr = []; metricsCache = [];
   idx = -1; analyzed = false; target = null; region.inIdx = region.outIdx = null; region.loop = false;
   viewInfo = { view: 'unknown', auto: 'unknown', facing: 'toward', ratio: 0 };
@@ -1003,7 +1027,35 @@ function computeMetrics(i) {
 
   return { M, view, turn, phase, inSign, facing, rightSign, P2, cog2, feet, ankMid, BH, q, src: f.src, skL, skR, shared: !!(sk && sk.shared) };
 }
-function buildCache() { metricsCache = frames.map((_, i) => computeMetrics(i)); }
+function buildCache() { metricsCache = frames.map((_, i) => computeMetrics(i)); buildVectors(); }
+// 運動ベクトル。サーバー結果があればそれ（カメラ平行移動を補正済み）、なければ画像上の見かけの移動を計算する
+function buildVectors() {
+  const n = frames.length; if (!n) { vecArr = []; indArr = []; tendArr = []; return; }
+  if (vecSource === 'server' && vecArr.length === n) return;
+  const dt = n > 1 ? frames[1].t - frames[0].t : 0.1, k = Math.max(1, Math.round(0.08 / dt));
+  const cx = metricsCache.map(m => m ? m.cog2.x : null), cy = metricsCache.map(m => m ? m.cog2.y : null);
+  const sx = oneEuroSeries(cx, dt, 1.5, 0.5), sy = oneEuroSeries(cy, dt, 1.5, 0.5);
+  vecArr = []; indArr = []; tendArr = [];
+  for (let i = 0; i < n; i++) {
+    const m = metricsCache[i], f = frames[i];
+    const a = Math.max(0, i - k), b = Math.min(n - 1, i + k);
+    if (!m || sx[i] == null || sx[a] == null || sx[b] == null || b === a) { vecArr.push(null); indArr.push(null); tendArr.push(null); continue; }
+    const vx = (sx[b] - sx[a]) / ((b - a) * dt), vy = (sy[b] - sy[a]) / ((b - a) * dt);
+    const core = Math.min(f.q[11], f.q[12], f.q[23], f.q[24], f.q[25], f.q[26], f.q[27], f.q[28]) * (f.src === 'interp' ? 0.7 : 1);
+    const mag = Math.hypot(vx, vy) / m.BH;
+    vecArr.push({ mode: 'A', dx: vx, dy: vy, mag_bh_s: mag, conf: core, camera_compensated: false, label: '重心移動（推定・画像上の見かけ。カメラ補正なし）' });
+    const t = m.turn || 0, outKey = t > 0 ? 'kneeL' : t < 0 ? 'kneeR' : null, inKey = t > 0 ? 'kneeR' : t < 0 ? 'kneeL' : null;
+    const kv = key => key && m.M[key] && m.M[key].v != null ? m.M[key].v : null;
+    const frontal = m.view !== 'side';
+    const dl = frontal ? (m.cog2.x - m.P2[27].x) / m.BH * 100 : null, dr = frontal ? (m.cog2.x - m.P2[28].x) / m.BH * 100 : null;
+    indArr.push({ turn: t, phase: m.phase, knee_out: kv(outKey), knee_in: kv(inKey), cog_to_ankleL_pct: dl, cog_to_ankleR_pct: dr, cog_speed_bh_s: mag, cog_lat_pct: kv('cogLat'), cog_fwd_pct: kv('cogFwd'), hip_height_pct: kv('hipHeight') });
+    if (dl != null) { const al = Math.abs(dl), ar = Math.abs(dr), sum = al + ar; const tL = sum > 1e-6 ? 1 - al / sum : 0.5; tendArr.push({ L: tL, R: 1 - tL, conf: core * 0.5, validated: false }); } else tendArr.push(null);
+  }
+  for (const key of ['knee_out', 'knee_in']) {
+    const ser = indArr.map(x => x && x[key] != null ? x[key] : null);
+    indArr.forEach((x, i) => { if (!x) return; const a = Math.max(0, i - k), b = Math.min(n - 1, i + k); x[key + '_rate'] = ser[a] != null && ser[b] != null && b > a ? (ser[b] - ser[a]) / ((b - a) * dt) : null; });
+  }
+}
 
 // ========== 指標カードの定義 ==========
 const legName = (d, side) => d && d.turn ? ((d.turn > 0) === (side === 'L') ? '外脚' : '内脚') : (side === 'L' ? '左' : '右');
@@ -1116,6 +1168,7 @@ function renderTurnTable() {
     `<tr><td><b>右ターン平均</b></td><td>${segments.filter(s => s.dir > 0).length} 回</td><td></td>${R.map(v => `<td>${v == null ? '–' : v.toFixed(1)}</td>`).join('')}</tr>`;
   el.innerHTML = `<table class="tt"><tr><th>ターン</th><th>時間</th><th>秒</th>${keys.map(k => `<th>${k[1]}</th>`).join('')}</tr>${rowsHtml}${symRows}</table>`;
   el.querySelectorAll('tr[data-i]').forEach(tr => tr.addEventListener('click', () => { pause(); setIndex(+tr.dataset.i); }));
+  if (refData) renderRefTable();
 }
 
 // ========== オーバーレイ ==========
@@ -1206,8 +1259,40 @@ function paintOverlay(ctx, W, H, i, unit) {
     const fc = { x: d.feet.x / VW * W, y: d.feet.y / VH * H };
     ctx.strokeStyle = '#22C55E'; ctx.lineWidth = 2.5 * unit * k; ctx.beginPath(); ctx.arc(fc.x, fc.y, 6 * unit * k, 0, Math.PI * 2); ctx.stroke();
   }
+  // 矢印（モード A: 重心移動、モード B: 荷重傾向の参考表示）
+  if (arrowMode === 'A' && vecArr[i]) {
+    const v = vecArr[i], sx = W / VW, sy = H / VH;
+    const ox = d.cog2.x * sx, oy = d.cog2.y * sy;
+    const BHpx = d.BH * sx;
+    const len = Math.min(0.6 * BHpx, Math.hypot(v.dx * sx, v.dy * sy) * 0.3); // 0.3 秒分の移動量、上限 0.6 身長
+    const nrm = Math.hypot(v.dx, v.dy) || 1, ex = ox + v.dx / nrm * len, ey = oy + v.dy / nrm * len;
+    const low = v.conf < 0.4, col = low ? '#9CA3AF' : v.mag_bh_s < 0.3 ? '#60A5FA' : v.mag_bh_s < 0.8 ? '#FACC15' : '#EF4444';
+    const th = (2 + 5 * Math.min(1, v.mag_bh_s / 1.2)) * unit * k;
+    drawArrow(ctx, ox, oy, ex, ey, col, th, Math.max(0.25, Math.min(1, v.conf)));
+    ctx.save(); ctx.globalAlpha = 1; ctx.font = `600 ${Math.max(9, 11 * k) * unit}px -apple-system, sans-serif`;
+    const lab = `重心移動 推定 ${v.mag_bh_s.toFixed(2)} 身長/秒${v.camera_compensated ? '' : '（見かけ）'}${low ? '・信頼度低' : ''}`;
+    const tw = ctx.measureText(lab).width; ctx.fillStyle = 'rgba(15,23,42,.7)'; ctx.fillRect(ex + 6 * unit, ey - 8 * unit, tw + 8 * unit, 14 * unit * Math.max(.8, k)); ctx.fillStyle = col; ctx.fillText(lab, ex + 10 * unit, ey + 3 * unit * Math.max(.8, k));
+    ctx.restore();
+  } else if (arrowMode === 'B' && tendArr[i]) {
+    const t = tendArr[i], sx = W / VW, sy = H / VH, BHpx = d.BH * sx;
+    for (const [key, j] of [['L', 27], ['R', 28]]) {
+      const ax = P[j][0], ay = P[j][1], len = (0.12 + 0.28 * t[key]) * BHpx;
+      drawArrow(ctx, ax, ay - len, ax, ay, '#9CA3AF', (2 + 4 * t[key]) * unit * k, Math.max(0.25, Math.min(0.8, t.conf + 0.3)));
+    }
+    ctx.save(); ctx.font = `600 ${Math.max(9, 11 * k) * unit}px -apple-system, sans-serif`; ctx.fillStyle = 'rgba(15,23,42,.7)';
+    const lab = `荷重傾向 参考・未検証（相対 L ${t.L.toFixed(2)} / R ${t.R.toFixed(2)}、実測ではない）`; const tw = ctx.measureText(lab).width;
+    ctx.fillRect(P[27][0] - 4 * unit, Math.max(P[27][1], P[28][1]) + 6 * unit, tw + 8 * unit, 14 * unit * Math.max(.8, k)); ctx.fillStyle = '#D1D5DB'; ctx.fillText(lab, P[27][0], Math.max(P[27][1], P[28][1]) + 17 * unit * Math.max(.8, k));
+    ctx.restore();
+  }
   ctx.restore();
   if (ov.text) paintText(ctx, W, H, i, unit, d);
+}
+function drawArrow(ctx, x0, y0, x1, y1, color, thick, alpha) {
+  const ang = Math.atan2(y1 - y0, x1 - x0), head = Math.max(6, thick * 2.2);
+  ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = thick; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - Math.cos(ang) * head * 0.6, y1 - Math.sin(ang) * head * 0.6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - Math.cos(ang - 0.5) * head, y1 - Math.sin(ang - 0.5) * head); ctx.lineTo(x1 - Math.cos(ang + 0.5) * head, y1 - Math.sin(ang + 0.5) * head); ctx.closePath(); ctx.fill();
+  ctx.restore();
 }
 function paintText(ctx, W, H, i, unit, d) {
   const fs = Math.max(10, Math.min(18, W / 60)) * unit, pad = fs * 0.6, lh = fs * 1.35;
@@ -1319,10 +1404,18 @@ async function exportVideo() {
 $('btnVideoExport').addEventListener('click', exportVideo);
 $('btnExportAbort').addEventListener('click', () => { exportAbort = true; });
 document.querySelectorAll('.toggles button[data-ov]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.ov; ov[k] = !ov[k]; b.classList.toggle('on', ov[k]); drawOverlay(); }));
+$('arrowMode').addEventListener('change', () => { arrowMode = $('arrowMode').value; updateArrowNote(); drawOverlay(); });
+function updateArrowNote() {
+  $('arrowNote').textContent = arrowMode === 'A' ? ('矢印 = 推定重心の移動方向と速さ（身長比/秒）。' + (vecSource === 'server' ? 'カメラの平行移動を補正済み（ズームは未補正）。' : 'ブラウザ内解析では画像上の見かけの移動（カメラ補正なし）。') + '色は速さ（青 < 黄 < 赤）、透明度は信頼度。荷重・力ではない。')
+    : arrowMode === 'B' ? '矢印 = 左右スキーの荷重傾向（参考・未検証）。推定重心と左右足首の相対位置による相対値で、実測荷重でも配分 % でもない。センサー正解との検証が済むまで灰色表示のみ。'
+    : arrowMode === 'C' ? '接触反力は 3D 復元・雪面校正・質量情報がないため計算できません。' : '';
+}
+updateArrowNote();
 
 // ========== 時系列グラフ ==========
 const graph = $('graph'), gctx = graph.getContext('2d');
 function graphSeries() {
+  if ($('graphSet').value === 'motion') return [['_knee_out', '#F87171', 90, '外脚の膝屈曲 °'], ['_knee_in', '#FB923C', 90, '内脚の膝屈曲 °'], ['_cog_speed', '#34D399', 1.5, '重心の速さ 身長/秒'], [viewInfo.view === 'side' ? '_cog_fwd' : '_cog_lat', '#A78BFA', 20, viewInfo.view === 'side' ? '推定重心 前後 %' : '推定重心 左右 %']];
   if (viewInfo.view === 'side') return [['trunkFwd', '#A78BFA', 60, '上体の前傾 °'], ['shinL', '#F87171', 60, 'すね角 左 °'], ['shinR', '#FB923C', 60, 'すね角 右 °'], ['cogFwd', '#34D399', 20, '推定重心 前後 %']];
   return [['lean', '#F87171', 40, '内傾角 °'], ['shoulderTilt', '#FDE047', 40, '肩の水平度 °'], ['angulation', '#FB923C', 40, '外傾 °'], ['skiOpen', '#34D399', 40, '板の開き °']];
 }
@@ -1339,15 +1432,25 @@ function drawGraph() {
   const series = graphSeries();
   for (const [key, col, fs] of series) {
     gctx.strokeStyle = col; gctx.lineWidth = 1.5; gctx.beginPath(); let pen = false;
-    for (let i = 0; i < n; i++) { const d = metricsCache[i], r = d && d.M[key]; if (!r || r.v == null) { pen = false; continue; } const y = mid - Math.max(-1, Math.min(1, r.v / fs)) * (h / 2 - 4); if (!pen) { gctx.moveTo(X(i), y); pen = true; } else gctx.lineTo(X(i), y); }
+    for (let i = 0; i < n; i++) {
+      let val = null;
+      if (key[0] === '_') { const ind = indArr[i]; val = ind ? ({ _knee_out: ind.knee_out, _knee_in: ind.knee_in, _cog_speed: ind.cog_speed_bh_s, _cog_fwd: ind.cog_fwd_pct, _cog_lat: ind.cog_lat_pct })[key] : null; }
+      else { const d = metricsCache[i], r = d && d.M[key]; val = r && r.v != null ? r.v : null; }
+      if (val == null) { pen = false; continue; }
+      const y = mid - Math.max(-1, Math.min(1, val / fs)) * (h / 2 - 4); if (!pen) { gctx.moveTo(X(i), y); pen = true; } else gctx.lineTo(X(i), y); }
     gctx.stroke();
   }
+  // 切り替え位置（ターンの向きが変わる境界）
+  gctx.strokeStyle = 'rgba(248,250,252,.6)'; gctx.setLineDash([2, 3]); gctx.lineWidth = 1;
+  for (let s = 1; s < segments.length; s++) if (segments[s].dir !== segments[s - 1].dir) { gctx.beginPath(); gctx.moveTo(X(segments[s].start), 0); gctx.lineTo(X(segments[s].start), h); gctx.stroke(); }
+  gctx.setLineDash([]);
   if (idx >= 0) { gctx.strokeStyle = '#F8FAFC'; gctx.lineWidth = 1.5; gctx.beginPath(); gctx.moveTo(X(idx), 0); gctx.lineTo(X(idx), h); gctx.stroke(); }
   gctx.fillStyle = '#64748B'; gctx.font = '10px -apple-system, sans-serif'; gctx.fillText('+', 3, 10); gctx.fillText('−', 3, h - 3);
-  $('graphLegend').innerHTML = series.map(s => `<span><i style="background:${s[1]}"></i>${s[3]}</span>`).join('') + '<span><i style="background:rgba(245,158,11,.5);border-radius:2px"></i>左ターン</span><span><i style="background:rgba(56,189,248,.5);border-radius:2px"></i>右ターン</span>';
+  $('graphLegend').innerHTML = series.map(s => `<span><i style="background:${s[1]}"></i>${s[3]}</span>`).join('') + '<span><i style="background:rgba(245,158,11,.5);border-radius:2px"></i>左ターン</span><span><i style="background:rgba(56,189,248,.5);border-radius:2px"></i>右ターン</span><span><i style="background:rgba(248,250,252,.6);border-radius:1px;width:2px"></i>切り替え</span>' + ($('graphSet').value === 'motion' ? '<span class="warn">身体運動指標です。荷重（N・体重比・%）ではありません</span>' : '');
 }
 const graphSeek = e => { const r = graph.getBoundingClientRect(); const x = (e.clientX - r.left) / r.width; pause(); setIndex(Math.round(x * (frames.length - 1))); };
 graph.addEventListener('pointerdown', e => { graph.setPointerCapture(e.pointerId); graphSeek(e); });
+$('graphSet').addEventListener('change', drawGraph);
 graph.addEventListener('pointermove', e => { if (e.buttons) graphSeek(e); });
 
 // ========== 再生・コマ送り・区間 ==========
@@ -1431,7 +1534,7 @@ const exportName = () => (($('fileName').textContent || 'ski').replace(/\.[^.]+$
 function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
 const METRIC_KEYS = CARDS.map(c => c.key).concat(['cogIn']);
 $('btnExport').addEventListener('click', () => {
-  const data = frames.map((f, i) => { const d = metricsCache[i]; return { t: f.t, src: f.src, lm: lmS[i], lmRaw: f.lm, world: worldS[i], q: f.q, ski: f.ski, turn: turnArr[i], phase: phaseArr[i],
+  const data = frames.map((f, i) => { const d = metricsCache[i]; return { t: f.t, src: f.src, lm: lmS[i], lmRaw: f.lm, world: worldS[i], q: f.q, ski: f.ski, turn: turnArr[i], phase: phaseArr[i], vec: vecArr[i], ind: indArr[i], tend: tendArr[i],
     metrics: d ? Object.fromEntries(METRIC_KEYS.filter(k => d.M[k]).map(k => [k, d.M[k]])) : null }; });
   download(new Blob([JSON.stringify({ source: $('fileName').textContent, fps: +$('fps').value, model: $('model').value, sensitivity: +$('sens').value, tilt, view: viewInfo, segments, frames: data })], { type: 'application/json' }), exportName() + '.pose.json');
 });
@@ -1494,8 +1597,11 @@ function loadServerResults(res, job) {
   viewInfo = { view: res.view, auto: (res.view_auto || {}).auto || res.view, facing: (res.view_auto || {}).facing || 'toward', ratio: (res.view_auto || {}).ratio || 0 };
   if ($('viewSel').value !== 'auto' && $('viewSel').value !== res.view) $('viewSel').value = res.view;
   analyzed = true;
+  vecSource = 'server';
+  vecArr = res.frames.map(f => f.vec || null); indArr = res.frames.map(f => f.ind || null); tendArr = res.frames.map(f => f.tend || null);
   buildCache();
   res.frames.forEach((f, i) => { if (f.metrics && metricsCache[i]) metricsCache[i].M = f.metrics; });
+  updateArrowNote();
   const q = res.quality || {};
   setStatus(`サーバー解析完了（${res.model_versions && res.model_versions.pose ? res.model_versions.pose.split(';')[0] : 'server'}）: 検出率 ${(100 * (q.detect_rate || 0)).toFixed(0)}%、補間 ${(100 * (q.interp_rate || 0)).toFixed(0)}%、左右修正 ${q.lr_swaps ?? 0} 回、ターン不明 ${(100 * (q.turn_unknown_rate || 0)).toFixed(0)}%。撮影方向: ${VIEW_NAME[res.view] || res.view}。` + (res.warnings && res.warnings.length ? ' 注意: ' + res.warnings.join('／') : ''), (q.detect_rate || 0) < 0.5);
   sStatus(`完了。ジョブ ${job.id}。段階別の所要時間: ` + (job.stages || []).map(s => `${s.stage} ${(s.duration_ms / 1000).toFixed(1)}s`).join(', '));
@@ -1507,7 +1613,41 @@ function loadServerResults(res, job) {
   setIndex(0); renderTurnTable();
   $('viewer').scrollIntoView({ behavior: 'smooth' });
 }
-window.skiDebug = () => ({ frames, lmS, worldS, fwdArr, turnArr, segments, metricsCache, viewInfo });
+// ========== 参照データとの比較（同じ撮影方向・同じ局面のみ） ==========
+const CMP_KEYS = [['shoulderTilt', '肩の水平度 °'], ['pelvisTilt', '骨盤の水平度 °'], ['trunkFwd', '上体の前傾 °'], ['lean', '内傾角 °'], ['angulation', '外傾 °'], ['kneeL', '膝 左 °'], ['kneeR', '膝 右 °'], ['skiOpen', '板の開き °'], ['cogLat', '推定重心 左右 %'], ['cogFwd', '推定重心 前後 %']];
+function phaseStats(getM, turnA, phaseA, n) {
+  const out = {};
+  for (const [key] of CMP_KEYS) {
+    out[key] = [0, 1, 2].map(ph => { const vs = []; for (let i = 0; i < n; i++) { if (!turnA[i] || phaseA[i] !== ph) continue; const r = getM(i); const m = r && r[key]; if (m && m.v != null && m.cls !== 'na') vs.push(m.v); } return vs.length ? { mean: vs.reduce((a, b) => a + b, 0) / vs.length, n: vs.length } : null; });
+  }
+  return out;
+}
+$('refFile').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    const fr = j.frames || [];
+    const view = j.view && typeof j.view === 'object' ? j.view.view : j.view;
+    refData = { name: f.name, view, n: fr.length, turn: fr.map(x => x.turn == null ? 0 : x.turn), phase: fr.map(x => x.phase ?? null), getM: i => fr[i] && fr[i].metrics ? fr[i].metrics : null, source: j.source || f.name };
+    renderRefTable();
+  } catch (err) { $('refTable').innerHTML = `<div class="note warn">参照データを読めませんでした: ${err.message}</div>`; }
+});
+function renderRefTable() {
+  if (!refData || !analyzed) return;
+  const mine = phaseStats(i => metricsCache[i] && metricsCache[i].M, turnArr, phaseArr, frames.length);
+  const ref = phaseStats(refData.getM, refData.turn, refData.phase, refData.n);
+  const sameView = refData.view === viewInfo.view;
+  let html = `<div class="note">参照: ${refData.source}（撮影方向: ${VIEW_NAME[refData.view] || refData.view || '不明'}）／ この動画（撮影方向: ${VIEW_NAME[viewInfo.view]}）。ターン局面ごとの平均。</div>`;
+  if (!sameView) { html += `<div class="note warn">撮影方向が異なるため数値の直接比較は行いません。同じ方向から撮った映像を参照にしてください。</div>`; $('refTable').innerHTML = html; return; }
+  html += '<table class="tt"><tr><th>項目</th><th>局面</th><th>この動画</th><th>参照</th><th>差</th></tr>';
+  for (const [key, label] of CMP_KEYS) for (const ph of [0, 1, 2]) {
+    const a = mine[key][ph], b = ref[key][ph]; if (!a && !b) continue;
+    html += `<tr><td>${label}</td><td>${['前半', '中盤', '後半'][ph]}</td><td>${a ? a.mean.toFixed(1) : '–'}</td><td>${b ? b.mean.toFixed(1) : '–'}</td><td>${a && b ? (a.mean - b.mean > 0 ? '+' : '') + (a.mean - b.mean).toFixed(1) : '–'}</td></tr>`;
+  }
+  html += '</table><div class="note">差は技術分析の参考です。参照選手の値を唯一の正解として扱わないでください。板の開き・内傾は板を検出できたコマ・ターン中のコマだけの平均です。</div>';
+  $('refTable').innerHTML = html;
+}
+window.skiDebug = () => ({ frames, lmS, worldS, fwdArr, turnArr, segments, metricsCache, viewInfo, vecArr, indArr, tendArr });
 </script>
 </body>
 </html>

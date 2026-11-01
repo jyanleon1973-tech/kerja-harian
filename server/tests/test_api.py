@@ -71,7 +71,7 @@ def test_job_lifecycle_on_video_without_person(client, tmp_path):
     jid = r.json()["id"]
     j = wait_done(client, jid)
     assert j["status"] == "done", j.get("error")
-    assert [s["stage"] for s in j["stages"]] == ["decode", "perframe", "temporal", "camera", "turns", "metrics", "confidence", "results"]
+    assert [s["stage"] for s in j["stages"]] == ["decode", "perframe", "temporal", "camera", "turns", "metrics", "vectors", "confidence", "results"]
     assert "pose" in j["model_versions"]
     res = client.get(f"/api/analysis/jobs/{jid}/results").json()
     assert res["schema"] == "ski-analysis/2" and res["quality"]["detect_rate"] == 0 and res["frame_count"] >= 8
