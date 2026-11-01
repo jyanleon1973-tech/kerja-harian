@@ -49,6 +49,14 @@
   .toggles { position:absolute; left:8px; bottom:8px; display:flex; gap:4px; flex-wrap:wrap; }
   .toggles button { padding:5px 9px; font-size:11px; background:rgba(30,41,59,.85); }
   .toggles button.on { background:#2563EB; }
+  .vtoggles { bottom:auto; top:8px; left:auto; right:8px; justify-content:flex-end; }
+  #videoTag { top:auto; bottom:8px; }
+  .vtoggles.hidden { display:none !important; }
+  #btnVideoExport { background:rgba(22,163,74,.9); }
+  .panes.single { grid-template-columns:1fr; }
+  .panes.single #threePane { display:none; }
+  .panes.single video { max-height:82vh; }
+  .exportbar { font-size:12px; color:#CBD5E1; margin-top:8px; }
   .controls { display:flex; flex-direction:column; gap:10px; }
   input[type=range] { width:100%; accent-color:#3B82F6; }
   .transport { display:flex; gap:6px; justify-content:center; align-items:center; flex-wrap:wrap; }
@@ -156,6 +164,14 @@
           <canvas id="overlay"></canvas>
         </div>
         <div class="tag" id="videoTag">元動画 + 検出骨格</div>
+        <div class="toggles vtoggles ao">
+          <button data-ov="skel" class="on">骨格</button>
+          <button data-ov="cog" class="on">重心</button>
+          <button data-ov="ski" class="on">板の線</button>
+          <button data-ov="text" class="on">数値</button>
+          <button id="btnSingle">3Dを隠す</button>
+          <button id="btnVideoExport">骨格入り動画を保存</button>
+        </div>
       </div>
       <div class="pane" id="threePane">
         <div id="three"></div>
@@ -180,6 +196,7 @@
     </div>
 
     <div class="card controls ao" style="margin-top:12px">
+      <div class="exportbar hidden" id="exportBar"><span id="exportMsg"></span> <button id="btnExportAbort" class="small danger">中止</button></div>
       <input type="range" id="slider" min="0" max="0" value="0" step="1">
       <canvas id="graph" title="タップした位置へ移動"></canvas>
       <div class="legend" style="margin-top:4px">
@@ -256,6 +273,7 @@ let target = null;        // 解析対象の人の位置 {x,y} (0-1)
 let landmarkerSens = null;
 const show = { cog:true, ski:true, base:true, trail:false, follow:false, smooth:true };
 let turnArr = [], metricsCache = [];
+const ov = { skel:true, cog:true, ski:true, text:true }; // 動画上の表示項目
 
 // ---------- MediaPipe 設定 ----------
 const MODEL_URL = {
@@ -878,45 +896,176 @@ function drawOverlay() {
   octx.setTransform(1, 0, 0, 1, vr.x * dpr, vr.y * dpr);
   const W = vr.w * dpr, H = vr.h * dpr;
   if (pickMode && target) {
-    octx.strokeStyle = '#FACC15'; octx.lineWidth = 3 * devicePixelRatio;
-    octx.beginPath(); octx.arc(target.x * W, target.y * H, 18 * devicePixelRatio, 0, Math.PI * 2); octx.stroke();
-    octx.beginPath(); octx.arc(target.x * W, target.y * H, 3 * devicePixelRatio, 0, Math.PI * 2); octx.fillStyle = '#FACC15'; octx.fill();
+    octx.strokeStyle = '#FACC15'; octx.lineWidth = 3 * dpr;
+    octx.beginPath(); octx.arc(target.x * W, target.y * H, 18 * dpr, 0, Math.PI * 2); octx.stroke();
+    octx.beginPath(); octx.arc(target.x * W, target.y * H, 3 * dpr, 0, Math.PI * 2); octx.fillStyle = '#FACC15'; octx.fill();
   }
   if (!analyzed) return;
-  const f = frames[idx]; if (!f || !f.lm) return;
-  octx.globalAlpha = f.src === 'interp' ? 0.5 : 1;
+  paintOverlay(octx, W, H, idx, dpr);
+}
+// 動画の上に骨格・板・重心・数値を描く。画面表示と動画書き出しの両方で使う。unit = 1 CSS px に相当する描画 px
+function paintOverlay(ctx, W, H, i, unit) {
+  const f = frames[i]; if (!f || !f.lm) { if (ov.text) paintText(ctx, W, H, i, unit, null); return; }
+  ctx.save();
+  ctx.globalAlpha = f.src === 'interp' ? 0.5 : 1;
   const P = f.lm.map(p => [p.x * W, p.y * H, p.visibility ?? 1]);
   // 人物が小さく映っている時は線と点も小さくする
-  const bb = bboxOf(f.lm), k = Math.max(0.3, Math.min(1, bb.h * H / (320 * devicePixelRatio)));
-  octx.lineWidth = 3 * devicePixelRatio * k; octx.lineCap = 'round';
-  for (const [a, b] of CONN) {
-    if (P[a][2] < 0.3 || P[b][2] < 0.3) continue;
-    const left = (a % 2 === 1);
-    octx.strokeStyle = left ? 'rgba(245,158,11,.9)' : 'rgba(56,189,248,.9)';
-    octx.beginPath(); octx.moveTo(P[a][0], P[a][1]); octx.lineTo(P[b][0], P[b][1]); octx.stroke();
+  const bb = bboxOf(f.lm), k = Math.max(0.3, Math.min(1, bb.h * H / (320 * unit)));
+  if (ov.skel) {
+    ctx.lineWidth = 3 * unit * k; ctx.lineCap = 'round';
+    for (const [a, b] of CONN) {
+      if (P[a][2] < 0.3 || P[b][2] < 0.3) continue;
+      const left = (a % 2 === 1);
+      ctx.strokeStyle = left ? 'rgba(245,158,11,.9)' : 'rgba(56,189,248,.9)';
+      ctx.beginPath(); ctx.moveTo(P[a][0], P[a][1]); ctx.lineTo(P[b][0], P[b][1]); ctx.stroke();
+    }
+    ctx.fillStyle = 'white';
+    for (let j = 11; j < 33; j++) { if (P[j][2] < 0.3) continue; ctx.beginPath(); ctx.arc(P[j][0], P[j][1], 3.5 * unit * k, 0, Math.PI * 2); ctx.fill(); }
+    // 肩と骨盤の線を少し太く（水平度の確認用）
+    ctx.lineWidth = 4.5 * unit * k; ctx.strokeStyle = 'rgba(255,255,255,.85)';
+    for (const [a, b] of [[11, 12], [23, 24]]) { if (P[a][2] < 0.3 || P[b][2] < 0.3) continue; ctx.beginPath(); ctx.moveTo(P[a][0], P[a][1]); ctx.lineTo(P[b][0], P[b][1]); ctx.stroke(); }
   }
-  octx.fillStyle = 'white';
-  for (let i = 11; i < 33; i++) { if (P[i][2] < 0.3) continue; octx.beginPath(); octx.arc(P[i][0], P[i][1], 3.5 * devicePixelRatio * k, 0, Math.PI * 2); octx.fill(); }
   // 画像から検出した板の向き（足元を通る線）。薄い線は検出できず足の向きで代用
-  if (show.ski && f.ski) {
+  if (ov.ski && f.ski) {
     const sx = W / video.videoWidth, sy = H / video.videoHeight;
     for (const key of ['L', 'R']) {
       const d = f.ski[key]; if (!d || !d.line) continue;
       const ln = d.line, L = bb.h * H * 0.45, dx = Math.cos(ln.ang2d) * L, dy = Math.sin(ln.ang2d) * L;
-      octx.strokeStyle = key === 'L' ? 'rgba(245,158,11,.95)' : 'rgba(56,189,248,.95)';
-      octx.lineWidth = (d.conf > 0.05 ? 5 : 2) * devicePixelRatio * k;
-      octx.beginPath(); octx.moveTo(ln.fx * sx - dx, ln.fy * sy - dy); octx.lineTo(ln.fx * sx + dx, ln.fy * sy + dy); octx.stroke();
+      ctx.strokeStyle = key === 'L' ? 'rgba(245,158,11,.95)' : 'rgba(56,189,248,.95)';
+      ctx.lineWidth = (d.conf > 0.05 ? 5 : 2) * unit * k;
+      ctx.beginPath(); ctx.moveTo(ln.fx * sx - dx, ln.fy * sy - dy); ctx.lineTo(ln.fx * sx + dx, ln.fy * sy + dy); ctx.stroke();
     }
   }
   // 2D 重心（画像座標で簡易表示）
   const cog2 = cogOf(f.lm.map(p => ({ x: p.x * W, y: p.y * H, z: 0 })));
-  if (cog2 && show.cog) {
-    octx.fillStyle = '#EF4444'; octx.beginPath(); octx.arc(cog2.x, cog2.y, 7 * devicePixelRatio * k, 0, Math.PI * 2); octx.fill();
-    octx.strokeStyle = 'rgba(239,68,68,.8)'; octx.setLineDash([6 * devicePixelRatio, 6 * devicePixelRatio]);
-    octx.beginPath(); octx.moveTo(cog2.x, cog2.y); octx.lineTo(cog2.x, H); octx.stroke(); octx.setLineDash([]);
+  if (cog2 && ov.cog) {
+    ctx.fillStyle = '#EF4444'; ctx.beginPath(); ctx.arc(cog2.x, cog2.y, 7 * unit * k, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(239,68,68,.8)'; ctx.lineWidth = 2 * unit * k; ctx.setLineDash([6 * unit, 6 * unit]);
+    ctx.beginPath(); ctx.moveTo(cog2.x, cog2.y); ctx.lineTo(cog2.x, H); ctx.stroke(); ctx.setLineDash([]);
+    // 両足の中心（画像上）
+    const fx = (P[27][0] + P[28][0] + P[29][0] + P[30][0] + P[31][0] + P[32][0]) / 6, fy = (P[27][1] + P[28][1] + P[29][1] + P[30][1] + P[31][1] + P[32][1]) / 6;
+    ctx.strokeStyle = '#22C55E'; ctx.lineWidth = 2.5 * unit * k; ctx.beginPath(); ctx.arc(fx, fy, 6 * unit * k, 0, Math.PI * 2); ctx.stroke();
   }
-  octx.globalAlpha = 1;
+  ctx.restore();
+  if (ov.text) paintText(ctx, W, H, i, unit, poseData(i));
 }
+// 画面左上の数値パネル
+function paintText(ctx, W, H, i, unit, d) {
+  const fs = Math.max(10, Math.min(18, W / 60)) * unit; // 文字サイズは映像幅に比例
+  const pad = fs * 0.6, lh = fs * 1.35;
+  const t = frames[i] ? frames[i].t : 0;
+  const lines = [];
+  lines.push([`${t.toFixed(2)} s`, d ? (d.turn < 0 ? '← 左ターン' : d.turn > 0 ? '右ターン →' : '直進 / 切り替え') : '未検出', '#F8FAFC']);
+  if (d) {
+    const f1 = v => (v >= 0 ? '+' : '') + v.toFixed(0);
+    const legL = legName(d, 'L'), legR = legName(d, 'R');
+    lines.push(['重心 前後', `${f1(d.cogFwd)} cm ${d.cogFwd > 3 ? '前' : d.cogFwd < -3 ? '後ろ' : '中'}`, d.cogFwd < -12 ? '#FCA5A5' : '#34D399']);
+    lines.push(['内傾角', d.turn ? `${f1(d.leanIn)}° ${d.leanIn >= 0 ? '内側' : '外側'}` : `${f1(d.lean)}°`, '#F87171']);
+    if (d.turn) lines.push(['外傾', `${f1(d.angulation)}°`, '#FB923C']);
+    lines.push(['上体 前かがみ', `${f1(d.trunkFwd)}°`, '#A78BFA']);
+    lines.push(['肩 / 骨盤', d.turn ? `${f1(d.shoulderIn)}° / ${f1(d.pelvisIn)}° ${d.shoulderIn >= 0 ? '外肩下' : '内肩下'}` : `${f1(d.shoulderTilt)}° / ${f1(d.pelvisTilt)}°`, '#FDE047']);
+    lines.push([`すね ${legL}/${legR}`, `${f1(d.shinL)}° / ${f1(d.shinR)}°`, (d.shinL < 0 || d.shinR < 0) ? '#FCA5A5' : '#E2E8F0']);
+    lines.push([`膝 ${legL}/${legR}`, `${f1(d.kneeL)}° / ${f1(d.kneeR)}°`, '#E2E8F0']);
+    lines.push(['板の開き', `${f1(d.skiOpen)}° ${Math.abs(d.skiOpen) < 6 ? 'パラレル' : d.skiOpen > 0 ? 'ハの字' : '逆ハ'}`, '#E2E8F0']);
+  }
+  ctx.save();
+  ctx.font = `600 ${fs}px -apple-system, "Hiragino Sans", sans-serif`;
+  let wmax = 0; for (const [a, b] of lines) wmax = Math.max(wmax, ctx.measureText(a).width + ctx.measureText(b).width + fs * 1.2);
+  const bw = wmax + pad * 2, bh = lines.length * lh + pad * 1.2;
+  ctx.fillStyle = 'rgba(15,23,42,.72)'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(pad * 0.6, pad * 0.6, bw, bh, fs * 0.5) : ctx.rect(pad * 0.6, pad * 0.6, bw, bh); ctx.fill();
+  lines.forEach(([a, b, col], n) => {
+    const y = pad * 0.6 + pad * 0.6 + lh * (n + 0.8);
+    ctx.fillStyle = '#94A3B8'; ctx.textAlign = 'left'; ctx.fillText(a, pad * 0.6 + pad, y);
+    ctx.fillStyle = col; ctx.textAlign = 'right'; ctx.fillText(b, pad * 0.6 + bw - pad, y);
+  });
+  ctx.restore();
+}
+
+// ---------- 骨格入り動画の書き出し ----------
+const expCv = document.createElement('canvas'), ectx = expCv.getContext('2d');
+let exporting = false, exportAbort = false;
+function pickMime() {
+  const cands = ['video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  for (const m of cands) if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  return null;
+}
+async function exportVideo() {
+  if (exporting || !analyzed) return;
+  const mime = pickMime();
+  if (!mime || !expCv.captureStream) { setStatus('このブラウザは動画の書き出しに対応していません（iPhone は iOS 14.5 以降の Safari、Android は Chrome で対応）。', true); return; }
+  exporting = true; exportAbort = false; pause();
+  $('exportBar').classList.remove('hidden');
+  const vw = video.videoWidth, vh = video.videoHeight, sc = Math.min(1, 1920 / Math.max(vw, vh));
+  expCv.width = Math.round(vw * sc); expCv.height = Math.round(vh * sc);
+  const unit = expCv.width / 640; // 640px 幅で 1 に相当する太さ
+  const speed = Math.min(1, +$('speed').value);
+  const dt = frames.length > 1 ? frames[1].t - frames[0].t : 0.1;
+  const fpsOut = 30;
+  const stream = expCv.captureStream(fpsOut);
+  let rec;
+  try { rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 }); }
+  catch (e) { setStatus('書き出しを開始できません: ' + e.message, true); exporting = false; $('exportBar').classList.add('hidden'); return; }
+  const chunks = []; rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const done = new Promise(res => { rec.onstop = res; });
+  let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch (e) {}
+  rec.start(500);
+  const paint = i => { ectx.drawImage(video, 0, 0, expCv.width, expCv.height); paintOverlay(ectx, expCv.width, expCv.height, i, unit); };
+  const t0 = performance.now(), total = frames.length;
+  try {
+    if (speed >= 1) {
+      // 等速: 動画をそのまま再生し、描画のたびに骨格を重ねる（シークしないので実時間どおりに記録できる）
+      await seekTo(0); video.playbackRate = 1;
+      await video.play();
+      const endT = frames[total - 1].t;
+      await new Promise(res => {
+        const loop = () => {
+          if (exportAbort || video.ended || video.currentTime >= endT) { video.pause(); return res(); }
+          const i = nearestIndex(video.currentTime);
+          if (i !== idx) setIndex(i, false);
+          paint(i);
+          if (i % 5 === 0) $('exportMsg').textContent = `骨格入り動画を書き出し中 ${i + 1} / ${total} コマ（等速、画面を閉じないでください）`;
+          requestAnimationFrame(loop);
+        };
+        loop();
+      });
+    } else {
+      // スロー: 1 コマずつシークしながら描き、1 コマ分の時間が経つまで同じ絵を描き続ける
+      const framePeriod = dt / speed * 1000;              // 1 コマの実時間（ms）
+      for (let i = 0; i < total; i++) {
+        if (exportAbort) break;
+        const target = t0 + i * framePeriod;
+        await seekTo(frames[i].t); await nextPaint();
+        setIndex(i, false);
+        paint(i);
+        while (performance.now() < target + framePeriod - 8 && !exportAbort) { await new Promise(r => setTimeout(r, Math.max(4, 1000 / fpsOut / 2))); paint(i); }
+        if (i % 3 === 0) $('exportMsg').textContent = `骨格入り動画を書き出し中 ${i + 1} / ${total} コマ（${speed}x スロー、画面を閉じないでください）`;
+      }
+    }
+  } finally {
+    rec.stop(); await done;
+    try { wake && wake.release(); } catch (e) {}
+    exporting = false; $('exportBar').classList.add('hidden');
+  }
+  if (!chunks.length) { setStatus('書き出しに失敗しました。', true); return; }
+  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const blob = new Blob(chunks, { type: mime.split(';')[0] });
+  const name = exportName() + `_skeleton_${speed}x.${ext}`;
+  const file = new File([blob], name, { type: blob.type });
+  // iPhone では共有シートから「ビデオを保存」で写真アプリに入る
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  download(blob, name);
+  setStatus(`骨格入り動画を保存しました（${(blob.size / 1e6).toFixed(1)} MB）。${exportAbort ? '途中で中止したため途中までです。' : ''}`);
+}
+$('btnVideoExport').addEventListener('click', exportVideo);
+$('btnExportAbort').addEventListener('click', () => { exportAbort = true; });
+document.querySelectorAll('.vtoggles button[data-ov]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.ov; ov[k] = !ov[k]; b.classList.toggle('on', ov[k]); drawOverlay(); }));
+$('btnSingle').addEventListener('click', () => {
+  const single = document.querySelector('.panes').classList.toggle('single');
+  $('btnSingle').textContent = single ? '3Dを表示' : '3Dを隠す'; $('btnSingle').classList.toggle('on', single);
+  resizeOverlay(); resizeThree(); drawGraph();
+});
 
 // ---------- 重心 (de Leva 部位質量比) ----------
 // de Leva (1996) 成人男性の部位質量比と、近位端からの重心位置比。合計 1.000
