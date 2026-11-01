@@ -81,7 +81,9 @@ def draw_overlay(img: np.ndarray, frame: dict[str, Any], metric: dict[str, Any] 
             cv2.putText(img, s, (int(12 * unit), int(10 + lh * (n + 0.8))), cv2.FONT_HERSHEY_SIMPLEX, fs, (235, 235, 235), 1, cv2.LINE_AA)
 
 
-def render_video(video_path: str, out_path: str, frames: list[dict[str, Any]], metrics: list, view: str, turn: list, phase: list, sample_fps: float, start_s: float, end_s: float | None, speed: float = 1.0, opts: dict[str, Any] | None = None, max_w: int = 1920) -> dict[str, Any]:
+def render_video(video_path: str, out_path: str, frames: list[dict[str, Any]], metrics: list, view: str, turn: list, phase: list, sample_fps: float, start_s: float, end_s: float | None, speed: float = 1.0, opts: dict[str, Any] | None = None, max_w: int = 1920, camera: list | None = None) -> dict[str, Any]:
+    """camera: コマごとの切り抜き {cx,cy,w,h}（正規化）。指定時は元動画を切り抜いて出力解像度に拡大し、オーバーレイにも同じ変換を適用する。
+    元画素数を超える拡大は画質を改善しないので、出力サイズは元動画（上限 max_w）のまま。"""
     opts = opts or {}
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません")
@@ -99,15 +101,31 @@ def render_video(video_path: str, out_path: str, frames: list[dict[str, Any]], m
             size = (bgr.shape[1] // 2 * 2, bgr.shape[0] // 2 * 2)
             proc = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{size[0]}x{size[1]}", "-r", f"{out_fps}", "-i", "-",
                                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", out_path], stdin=subprocess.PIPE)
-        bgr = cv2.resize(bgr, size)
-        # 描画座標は元解像度基準（kpS は正規化、ski/cog2 は px）→ 縮小率を掛ける
-        sx = size[0] / w if w else 1.0
+        cam = camera[k] if camera and k < len(camera) and camera[k] else None
+        if cam and cam.get("w", 1.0) < 0.999:
+            # 切り抜き → 出力サイズへ（アスペクトは元動画と同じ）
+            cw, ch = cam["w"] * w, cam["h"] * h
+            x0 = min(max(0.0, cam["cx"] * w - cw / 2), w - cw); y0 = min(max(0.0, cam["cy"] * h - ch / 2), h - ch)
+            bgr = cv2.resize(bgr[int(y0):int(y0 + ch), int(x0):int(x0 + cw)], size, interpolation=cv2.INTER_LINEAR)
+            # 元動画 px → 出力 px の変換: (p - origin) * scale
+            sx = size[0] / cw; off = (x0, y0)
+        else:
+            bgr = cv2.resize(bgr, size)
+            sx = size[0] / w if w else 1.0; off = (0.0, 0.0)
         fr = frames[k]; m = metrics[k] if k < len(metrics) else None
         if m:
-            m = {**m, "cog2": [m["cog2"][0] * sx, m["cog2"][1] * sx], "feet2": [m["feet2"][0] * sx, m["feet2"][1] * sx]}
+            m = {**m, "cog2": [(m["cog2"][0] - off[0]) * sx, (m["cog2"][1] - off[1]) * sx], "feet2": [(m["feet2"][0] - off[0]) * sx, (m["feet2"][1] - off[1]) * sx]}
         if fr.get("ski"):
-            fr = {**fr, "ski": {kk: ({**v, "fx": v["fx"] * sx, "fy": v["fy"] * sx, "tip": v["tip"] * sx, "tail": v["tail"] * sx} if isinstance(v, dict) else v) for kk, v in fr["ski"].items()}}
+            fr = {**fr, "ski": {kk: ({**v, "fx": (v["fx"] - off[0]) * sx, "fy": (v["fy"] - off[1]) * sx, "tip": v["tip"] * sx, "tail": v["tail"] * sx} if isinstance(v, dict) else v) for kk, v in fr["ski"].items()}}
+        if fr.get("kpS") and cam and cam.get("w", 1.0) < 0.999:
+            # 正規化座標（元動画全体） → 切り抜き内の正規化座標。切り抜きと出力は同じアスペクト
+            cw, ch = size[0] / sx, size[1] / sx
+            fr = {**fr, "kpS": [[(p[0] * w - off[0]) / cw, (p[1] * h - off[1]) / ch, p[2]] for p in fr["kpS"]]}
         draw_overlay(bgr, fr, m, view, turn[k] if k < len(turn) else None, phase[k] if k < len(phase) else None, opts)
+        if cam and opts.get("text", True):
+            st = {"tracking": "追尾中", "interp": "追尾（補間）", "hold": "追尾: 保持", "lost": "追尾: 見失い（全体へ）", "normal": ""}.get(cam.get("state"), "")
+            label = f"zoom x{cam.get('zoom', 1):.2f} {st}" + ("  low-res" if cam.get("lowres") else "")
+            cv2.putText(bgr, label, (int(12), size[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5 * max(1.0, size[0] / 640), (235, 235, 235), 1, cv2.LINE_AA)
         proc.stdin.write(bgr.tobytes()); n += 1
     if proc:
         proc.stdin.close(); proc.wait(timeout=600)

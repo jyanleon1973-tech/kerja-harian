@@ -212,6 +212,7 @@
         <canvas id="overlay"></canvas>
       </div>
       <div class="tag" id="videoTag">元動画</div>
+      <div class="tag" id="followTag" style="left:auto; right:8px; top:auto; bottom:30px; display:none"></div>
       <div class="tag" id="detTag" style="left:auto;right:8px;top:auto;bottom:8px"></div>
       <div class="toggles ao">
         <button data-ov="skel" class="on">骨格</button>
@@ -220,6 +221,12 @@
         <button data-ov="ski" class="on">板</button>
         <button data-ov="text" class="on">数値</button>
         <button data-ov="unsure" class="on">不確実も薄く表示</button>
+        <select id="followMode" title="追尾表示" style="font-size:11px; padding:4px 6px">
+          <option value="normal">通常表示</option>
+          <option value="follow">選手追尾</option>
+          <option value="zoom">追尾＋自動ズーム</option>
+          <option value="skis">スキー板追尾</option>
+        </select>
         <select id="arrowMode" title="矢印の表示モード" style="font-size:11px; padding:4px 6px">
           <option value="none">矢印なし</option>
           <option value="A" selected>A: 重心移動（推定）</option>
@@ -243,6 +250,21 @@
 
     <div class="card controls ao" style="margin-top:12px">
       <div class="exportbar hidden" id="exportBar"><span id="exportMsg"></span> <button id="btnExportAbort" class="small danger">中止</button></div>
+      <details class="tips" id="followBox"><summary>追尾表示の設定（AI 自動追跡・選手中心ズーム）</summary>
+        <div class="row" style="margin-top:8px; gap:14px">
+          <label class="lbl">構図
+            <select id="fFraming" style="font-size:12px; padding:4px 8px"><option value="full">全身＋板</option><option value="body">全身（身体）</option><option value="upper">上半身重視</option><option value="skis">スキー板重視</option></select>
+          </label>
+          <label class="lbl" style="min-width:160px">表示サイズ <span id="fTargetV">75</span>%<input type="range" id="fTarget" min="40" max="95" step="1" value="75"></label>
+          <label class="lbl" style="min-width:160px">拡大率 ×<span id="fZoomV">1.0</span><input type="range" id="fZoom" min="0.5" max="2" step="0.05" value="1"></label>
+          <label class="lbl" style="min-width:160px">追尾の滑らかさ <span id="fSmoothV">0.5</span><input type="range" id="fSmooth" min="0" max="1" step="0.05" value="0.5"></label>
+          <label class="lbl" style="min-width:160px">選手の中心位置（上下） <span id="fCenterV">0</span><input type="range" id="fCenter" min="-0.3" max="0.3" step="0.02" value="0"></label>
+          <label class="lbl">書き出しの内容
+            <select id="exportPreset" style="font-size:12px; padding:4px 8px"><option value="current">現在の表示どおり</option><option value="follow">追尾のみ</option><option value="zoom">追尾＋自動ズーム</option><option value="skel">追尾＋骨格</option><option value="ski">追尾＋スキー板</option><option value="all">追尾＋骨格＋荷重矢印＋数値</option></select>
+          </label>
+        </div>
+        <div class="note" id="followStatus" style="margin-top:6px">追尾は解析データ（元動画座標）を変更せず、表示時に切り抜き・拡大するだけです。最大 4 倍。元動画の画素を超える拡大は画質を改善しません。見失ったときは最後の位置を約 1 秒保持し、その後は全体表示に戻ります。</div>
+      </details>
       <input type="range" id="slider" min="0" max="0" value="0" step="1">
       <div class="row" style="gap:10px">
         <label class="lbl">グラフ
@@ -350,6 +372,8 @@ let refData = null;                // 比較用の参照データ
 let viewMode = 'video', split = false;                     // 表示モード: video | figure | skis
 const show3d = { figure:true, skis:true, boots:true, cog:true, arrows:true, trail:true };
 let p3Arr = [], p3Source = 'none', skiLenM = 1.65;        // 3D 姿勢（サーバー or 簡易）
+const follow = { mode: 'normal', framing: 'full', target_frac: 0.75, zoom_mult: 1.0, smooth: 0.5, center_y: 0.0, max_zoom: 4.0 };
+let trackArr = [], camArr = [], trackSource = 'none';     // 追跡データ（AI 側）と追尾カメラ軌道（カメラ制御側）
 const QMIN = 0.5;      // これ未満の関節は「不確実」
 const SKI_MIN = 0.55;  // これ未満の板検出は「未検出」扱い
 
@@ -400,7 +424,7 @@ $('file').addEventListener('change', e => {
   video.addEventListener('error', () => setStatus('この動画はブラウザで再生できない形式です。別の形式（MP4/MOV）をお試しください。', true));
 });
 function resetAnalysis() {
-  vecSource = 'client'; vecArr = []; indArr = []; tendArr = []; p3Arr = []; p3Source = 'none'; trail3 = { L: [], R: [], C: [] };
+  vecSource = 'client'; vecArr = []; indArr = []; tendArr = []; p3Arr = []; p3Source = 'none'; trail3 = { L: [], R: [], C: [] }; trackArr = []; camArr = []; trackSource = 'none';
   frames = []; lmS = []; worldS = []; fwdArr = []; turnArr = []; phaseArr = []; segments = []; floorArr = []; metricsCache = [];
   idx = -1; analyzed = false; target = null; region.inIdx = region.outIdx = null; region.loop = false;
   viewInfo = { view: 'unknown', auto: 'unknown', facing: 'toward', ratio: 0 };
@@ -540,7 +564,7 @@ async function analyze() {
     resizeOverlay();
     await seekTo(0);
     setIndex(0);
-    renderTurnTable();
+    renderTurnTable(); updateFollowStatus();
     $('viewer').scrollIntoView({ behavior: 'smooth' });
   } catch (e) {
     console.error(e);
@@ -1067,7 +1091,7 @@ function computeMetrics(i) {
 
   return { M, view, turn, phase, inSign, facing, rightSign, P2, cog2, feet, ankMid, BH, q, src: f.src, skL, skR, shared: !!(sk && sk.shared) };
 }
-function buildCache() { metricsCache = frames.map((_, i) => computeMetrics(i)); buildVectors(); if (p3Source !== 'server') buildP3Client(); }
+function buildCache() { metricsCache = frames.map((_, i) => computeMetrics(i)); buildVectors(); if (p3Source !== 'server') buildP3Client(); buildTracks(); planCamera(); }
 // 運動ベクトル。サーバー結果があればそれ（カメラ平行移動を補正済み）、なければ画像上の見かけの移動を計算する
 function buildVectors() {
   const n = frames.length; if (!n) { vecArr = []; indArr = []; tendArr = []; return; }
@@ -1228,8 +1252,19 @@ function drawOverlay() {
   octx.setTransform(1, 0, 0, 1, 0, 0);
   octx.clearRect(0, 0, overlay.width, overlay.height);
   const vr = videoRect(), dpr = devicePixelRatio;
-  octx.setTransform(1, 0, 0, 1, vr.x * dpr, vr.y * dpr);
   const W = vr.w * dpr, H = vr.h * dpr;
+  const cam = analyzed && follow.mode !== 'normal' ? camArr[idx] : null;
+  if (cam && cam.w < 0.999) {
+    // 追尾表示: 元動画を切り抜いて表示領域に拡大し、オーバーレイにも同じ変換を使う（解析データは元動画座標のまま）
+    video.style.opacity = '0';
+    composeFrame(octx, vr.x * dpr, vr.y * dpr, W, H, idx, cam, dpr);
+    const st = { tracking: '追尾中', interp: '追尾（補間）', hold: '追尾: 保持中', lost: '追尾: 見失い（全体表示へ）' }[cam.state] || '';
+    $('followTag').style.display = 'block'; $('followTag').textContent = `${st}　×${cam.zoom.toFixed(2)}${cam.lowres ? '　元動画の解像度が不足' : ''}`;
+    $('followTag').style.color = cam.state === 'lost' ? '#FCA5A5' : cam.lowres ? '#FDE047' : '#CBD5E1';
+    return;
+  }
+  video.style.opacity = ''; $('followTag').style.display = 'none';
+  octx.setTransform(1, 0, 0, 1, vr.x * dpr, vr.y * dpr);
   if (pickMode && target) {
     octx.strokeStyle = '#FACC15'; octx.lineWidth = 3 * dpr;
     octx.beginPath(); octx.arc(target.x * W, target.y * H, 18 * dpr, 0, Math.PI * 2); octx.stroke();
@@ -1239,9 +1274,20 @@ function drawOverlay() {
   paintOverlay(octx, W, H, idx, dpr);
 }
 // 動画の上に描く。確からしさの低い関節は白抜き、関係する線は細い点線（「不確実も薄く表示」OFF なら描かない）
-function paintOverlay(ctx, W, H, i, unit) {
+// 切り抜き cam（正規化 cx,cy,w,h）を使って、動画と解析表示を同じ変換で ctx の (dx,dy,dw,dh) に描く
+function composeFrame(ctx, dx, dy, dw, dh, i, cam, unit) {
+  const sx = (cam.cx - cam.w / 2) * VW, sy = (cam.cy - cam.h / 2) * VH, sw = cam.w * VW, sh = cam.h * VH;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  try { ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh); } catch (e) {}
+  const k = dw / sw;                                   // 元動画 px → 表示 px
+  ctx.save(); ctx.beginPath(); ctx.rect(dx, dy, dw, dh); ctx.clip();
+  ctx.setTransform(1, 0, 0, 1, dx - sx * k, dy - sy * k);
+  paintOverlay(ctx, VW * k, VH * k, i, unit / Math.max(1, cam.zoom) , { x: dx, y: dy });
+  ctx.restore();
+}
+function paintOverlay(ctx, W, H, i, unit, textBase) {
   const f = frames[i], d = metricsCache[i];
-  if (!f || !lmS[i] || !d) { if (ov.text) paintText(ctx, W, H, i, unit, null); return; }
+  if (!f || !lmS[i] || !d) { if (ov.text) paintText(ctx, W, H, i, unit, null, textBase); return; }
   const lm = lmS[i], q = f.q;
   ctx.save();
   ctx.globalAlpha = f.src === 'interp' ? 0.6 : 1;
@@ -1325,7 +1371,7 @@ function paintOverlay(ctx, W, H, i, unit) {
     ctx.restore();
   }
   ctx.restore();
-  if (ov.text) paintText(ctx, W, H, i, unit, d);
+  if (ov.text) paintText(ctx, W, H, i, unit, d, textBase);
 }
 function drawArrow(ctx, x0, y0, x1, y1, color, thick, alpha) {
   const ang = Math.atan2(y1 - y0, x1 - x0), head = Math.max(6, thick * 2.2);
@@ -1334,8 +1380,9 @@ function drawArrow(ctx, x0, y0, x1, y1, color, thick, alpha) {
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - Math.cos(ang - 0.5) * head, y1 - Math.sin(ang - 0.5) * head); ctx.lineTo(x1 - Math.cos(ang + 0.5) * head, y1 - Math.sin(ang + 0.5) * head); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
-function paintText(ctx, W, H, i, unit, d) {
-  const fs = Math.max(10, Math.min(18, W / 60)) * unit, pad = fs * 0.6, lh = fs * 1.35;
+function paintText(ctx, W, H, i, unit, d, textBase) {
+  if (textBase) { ctx.setTransform(1, 0, 0, 1, textBase.x, textBase.y); unit = ctx.canvas === overlay ? devicePixelRatio : ctx.canvas.width / 640; }
+  const fs = Math.max(10, Math.min(18, (textBase ? ctx.canvas.width / (ctx.canvas === overlay ? devicePixelRatio : ctx.canvas.width / 640) : W) / 60)) * unit, pad = fs * 0.6, lh = fs * 1.35;
   const t = frames[i] ? frames[i].t : 0;
   const lines = [];
   lines.push([`${t.toFixed(2)} s　${VIEW_NAME[viewInfo.view]}`, d ? (d.turn ? `${d.turn < 0 ? '← 左ターン' : '右ターン →'} ${['前半', '中盤', '後半'][d.phase]}` : '直進/切替') : (frames[i] && frames[i].src ? '' : '未検出'), '#F8FAFC']);
@@ -1394,7 +1441,21 @@ async function exportVideo() {
   const done = new Promise(res => { rec.onstop = res; });
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch (e) {}
   rec.start(500);
-  const paint = i => { ectx.drawImage(video, 0, 0, expCv.width, expCv.height); paintOverlay(ectx, expCv.width, expCv.height, i, unit); };
+  // 書き出し内容のプリセット（追尾モードと表示項目を一時的に切り替える）
+  const preset = $('exportPreset').value, savedOv = { ...ov }, savedMode = follow.mode, savedArrow = arrowMode;
+  if (preset !== 'current') {
+    follow.mode = preset === 'zoom' ? 'zoom' : 'follow'; if (preset !== 'follow' && preset !== 'zoom') follow.mode = follow.mode === 'normal' ? 'follow' : follow.mode;
+    Object.assign(ov, { skel: preset === 'skel' || preset === 'all', lines: preset === 'skel' || preset === 'all', cog: preset === 'all', ski: preset === 'ski' || preset === 'all', text: preset === 'all', unsure: true });
+    if (preset !== 'all') arrowMode = 'none';
+    planCamera();
+  }
+  const restore = () => { Object.assign(ov, savedOv); follow.mode = savedMode; arrowMode = savedArrow; planCamera(); drawOverlay(); };
+  const paint = i => {
+    const cam = follow.mode !== 'normal' ? camArr[i] : null;
+    if (cam && cam.w < 0.999) composeFrame(ectx, 0, 0, expCv.width, expCv.height, i, cam, unit);
+    else { ectx.setTransform(1, 0, 0, 1, 0, 0); ectx.drawImage(video, 0, 0, expCv.width, expCv.height); paintOverlay(ectx, expCv.width, expCv.height, i, unit, { x: 0, y: 0 }); }
+    if (cam && cam.w < 0.999) { ectx.setTransform(1, 0, 0, 1, 0, 0); ectx.font = `600 ${12 * unit}px -apple-system, sans-serif`; ectx.fillStyle = 'rgba(15,23,42,.6)'; ectx.fillRect(8 * unit, expCv.height - 24 * unit, 230 * unit, 18 * unit); ectx.fillStyle = '#E2E8F0'; ectx.fillText(`追尾 ×${cam.zoom.toFixed(2)} ${cam.state}${cam.lowres ? ' 解像度不足' : ''}`, 12 * unit, expCv.height - 11 * unit); }
+  };
   const a = region.inIdx ?? 0, b = region.outIdx ?? frames.length - 1;
   const t0 = performance.now(), total = b - a + 1;
   try {
@@ -1429,6 +1490,7 @@ async function exportVideo() {
     rec.stop(); await done;
     try { wake && wake.release(); } catch (e) {}
     exporting = false; $('exportBar').classList.add('hidden');
+    restore();
   }
   if (!chunks.length) { setStatus('書き出しに失敗しました。', true); return; }
   const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
@@ -1584,6 +1646,63 @@ $('btnCsv').addEventListener('click', () => {
   frames.forEach((f, i) => { const d = metricsCache[i]; rows.push([f.t.toFixed(3), f.src || '', turnArr[i] ?? '', phaseArr[i] ?? ''].concat(METRIC_KEYS.flatMap(k => { const r = d && d.M[k]; return r ? [r.v == null ? '' : r.v.toFixed(2), r.cls, r.conf.toFixed(2)] : ['', '', '']; })).join(',')); });
   download(new Blob(['﻿' + rows.join('\n')], { type: 'text/csv' }), exportName() + '.csv');
 });
+// ========== AI 自動追跡・選手中心ズーム（追跡データとカメラ制御を分離） ==========
+function trackFrameClient(i) {
+  const lm = lmS[i], f = frames[i]; if (!lm || !f.q) return null;
+  const pts = lm.map((p, j) => [p.x, p.y, f.q[j]]).filter(p => p[2] >= 0.3); if (pts.length < 4) return null;
+  const box = arr => [Math.min(...arr.map(p => p[0])), Math.min(...arr.map(p => p[1])), Math.max(...arr.map(p => p[0])), Math.max(...arr.map(p => p[1]))];
+  const body = box(pts), full = body.slice();
+  const upper = [Math.min(...[0, 7, 8, 11, 12, 13, 14, 23, 24].map(j => lm[j].x)), Math.min(...[0, 7, 8, 11, 12].map(j => lm[j].y)), Math.max(...[0, 7, 8, 11, 12, 13, 14, 23, 24].map(j => lm[j].x)), Math.max(lm[23].y, lm[24].y)];
+  const skis = [Math.min(...[27, 28, 29, 30, 31, 32].map(j => lm[j].x)), Math.min(...[25, 26, 27, 28].map(j => lm[j].y)), Math.max(...[27, 28, 29, 30, 31, 32].map(j => lm[j].x)), Math.max(...[27, 28, 29, 30, 31, 32].map(j => lm[j].y))];
+  const sk = f.ski || {};
+  for (const key of ['L', 'R']) { const s = sk[key]; if (!s || s.conf < 0.55) continue; const dx = Math.cos(s.ang), dy = Math.sin(s.ang);
+    for (const t of [-s.tail, s.tip]) { const x = (s.fx + dx * t) / VW, y = (s.fy + dy * t) / VH; full[0] = Math.min(full[0], x); full[1] = Math.min(full[1], y); full[2] = Math.max(full[2], x); full[3] = Math.max(full[3], y); skis[0] = Math.min(skis[0], x); skis[1] = Math.min(skis[1], y); skis[2] = Math.max(skis[2], x); skis[3] = Math.max(skis[3], y); } }
+  for (const j of [15, 16]) if (f.q[j] >= 0.3) { full[0] = Math.min(full[0], lm[j].x - 0.02); full[2] = Math.max(full[2], lm[j].x + 0.02); }
+  const qcore = Math.min(...[11, 12, 23, 24, 25, 26, 27, 28].map(j => f.q[j]));
+  return { track_id: 1, body, full, upper, skis, center: [(lm[23].x + lm[24].x) / 2, (lm[23].y + lm[24].y) / 2], conf: qcore * (f.src === 'interp' ? 0.7 : 1), state: f.src || 'lost' };
+}
+function buildTracks() { if (trackSource === 'server' && trackArr.length === frames.length) return; trackArr = frames.map((_, i) => trackFrameClient(i)); trackSource = frames.length ? 'client' : 'none'; }
+function planCamera() {
+  const n = trackArr.length; camArr = [];
+  if (!n) return;
+  const dt = n > 1 ? frames[1].t - frames[0].t : 0.1, aspect = VW / VH;
+  if (follow.mode === 'normal') { camArr = trackArr.map(() => ({ cx: .5, cy: .5, w: 1, h: 1, zoom: 1, state: 'normal', lowres: false })); return; }
+  const key = follow.mode === 'skis' ? 'skis' : follow.framing;
+  const cxs = [], cys = [], zs = [], states = [];
+  for (const t of trackArr) {
+    if (!t || t.conf < 0.2) { cxs.push(null); cys.push(null); zs.push(null); states.push('lost'); continue; }
+    const b = t[key]; let z;
+    if (follow.mode === 'follow') z = follow.zoom_mult; else { const bh = Math.max(1e-3, (b[3] - b[1]) * 1.15), bw = Math.max(1e-3, (b[2] - b[0]) * 1.15) / aspect; z = follow.target_frac / Math.max(bh, bw) * follow.zoom_mult; }
+    cxs.push((b[0] + b[2]) / 2); cys.push((b[1] + b[3]) / 2 + follow.center_y * (b[3] - b[1])); zs.push(Math.max(1, Math.min(follow.max_zoom, z))); states.push(t.state);
+  }
+  const minc = 0.3 + (1 - follow.smooth) * 2.2;
+  const sx = oneEuroSeries(cxs, dt, minc, 0.8), sy = oneEuroSeries(cys, dt, minc, 0.8), sz = oneEuroSeries(zs, dt, minc * 0.7, 0.3);
+  const hold = Math.max(1, Math.round(1 / dt)), maxPan = 0.6 * dt, maxZr = 1.5 * dt; let lost = 0, last = null;
+  for (let i = 0; i < n; i++) {
+    let cur;
+    if (sx[i] == null) { lost++; cur = last && lost <= hold ? { ...last, state: 'hold' } : last ? { cx: last.cx + (.5 - last.cx) * .1, cy: last.cy + (.5 - last.cy) * .1, zoom: last.zoom + (1 - last.zoom) * .1, state: 'lost' } : { cx: .5, cy: .5, zoom: 1, state: 'lost' }; }
+    else { lost = 0; cur = { cx: sx[i], cy: sy[i], zoom: sz[i], state: states[i] === 'det' ? 'tracking' : 'interp' };
+      if (last) { cur.cx = last.cx + Math.max(-maxPan, Math.min(maxPan, cur.cx - last.cx)); cur.cy = last.cy + Math.max(-maxPan, Math.min(maxPan, cur.cy - last.cy)); cur.zoom = last.zoom + Math.max(-maxZr, Math.min(maxZr, cur.zoom - last.zoom)); } }
+    const z = Math.max(1, Math.min(follow.max_zoom, cur.zoom)), w = 1 / z, h = 1 / z;
+    const cx = Math.min(1 - w / 2, Math.max(w / 2, cur.cx)), cy = Math.min(1 - h / 2, Math.max(h / 2, cur.cy));
+    camArr.push({ cx, cy, w, h, zoom: z, state: cur.state, lowres: w * VW < 640 }); last = { cx, cy, zoom: z };
+  }
+}
+function followChanged() {
+  follow.mode = $('followMode').value; follow.framing = $('fFraming').value; follow.target_frac = +$('fTarget').value / 100; follow.zoom_mult = +$('fZoom').value; follow.smooth = +$('fSmooth').value; follow.center_y = +$('fCenter').value;
+  $('fTargetV').textContent = $('fTarget').value; $('fZoomV').textContent = (+$('fZoom').value).toFixed(2); $('fSmoothV').textContent = $('fSmooth').value; $('fCenterV').textContent = $('fCenter').value;
+  if (analyzed) { planCamera(); drawOverlay(); updateFollowStatus(); }
+}
+function updateFollowStatus() {
+  if (!camArr.length) return;
+  const lost = camArr.filter(c => c.state === 'lost').length, low = camArr.filter(c => c.lowres).length, mz = Math.max(...camArr.map(c => c.zoom));
+  $('followStatus').textContent = `追跡データ: ${trackSource === 'server' ? 'サーバー' : 'ブラウザ内'}（対象 1 名、タップ指定可）。見失い ${lost} コマ、最大ズーム ×${mz.toFixed(2)}${low ? `、解像度不足 ${low} コマ（元動画 ${VW}×${VH}）` : ''}。追尾は表示時の切り抜きで、解析値は変わりません。`;
+}
+['followMode', 'fFraming', 'fTarget', 'fZoom', 'fSmooth', 'fCenter'].forEach(id => $(id).addEventListener('input', followChanged));
+$('followMode').addEventListener('change', followChanged);
+// 追尾表示中は、再生中も毎描画で動画の切り抜きを更新する
+(function followLoop() { requestAnimationFrame(followLoop); if (analyzed && playing && follow.mode !== 'normal' && !$('videoPane').classList.contains('hidden')) drawOverlay(); })();
+
 // ========== 3D 表示（人形・板） ==========
 // 3D 源はサーバーの pose3d（拘束付き補正）を優先。無い場合はブラウザ内の簡易版（BlazePose の 3D に膝の過伸展禁止・接地・板接続のみ）。
 const toY = p => Array.isArray(p) ? [p[0], -p[1], -p[2]] : [p.x, -p.y, -p.z];   // BlazePose world → Y 上, Z カメラ側（配列・オブジェクト両対応）
@@ -1839,6 +1958,7 @@ function loadServerResults(res, job) {
   vecSource = 'server';
   vecArr = res.frames.map(f => f.vec || null); indArr = res.frames.map(f => f.ind || null); tendArr = res.frames.map(f => f.tend || null);
   p3Arr = res.frames.map(f => f.p3 || null); p3Source = p3Arr.some(Boolean) ? 'server' : 'none'; skiLenM = (res.pose3d && res.pose3d.ski_length_m) || 1.65;
+  trackArr = res.frames.map(f => f.track || null); trackSource = trackArr.some(Boolean) ? 'server' : 'none';
   buildCache();
   res.frames.forEach((f, i) => { if (f.metrics && metricsCache[i]) metricsCache[i].M = f.metrics; });
   updateArrowNote();
@@ -1850,7 +1970,7 @@ function loadServerResults(res, job) {
   $('videoTag').textContent = '元動画 + 検出結果（サーバー）';
   $('slider').max = frames.length - 1;
   buildCards(); buildClsTable(); resizeOverlay();
-  setIndex(0); renderTurnTable();
+  setIndex(0); renderTurnTable(); updateFollowStatus();
   $('viewer').scrollIntoView({ behavior: 'smooth' });
 }
 // ========== 参照データとの比較（同じ撮影方向・同じ局面のみ） ==========
@@ -1887,7 +2007,7 @@ function renderRefTable() {
   html += '</table><div class="note">差は技術分析の参考です。参照選手の値を唯一の正解として扱わないでください。板の開き・内傾は板を検出できたコマ・ターン中のコマだけの平均です。</div>';
   $('refTable').innerHTML = html;
 }
-window.skiDebug = () => ({ frames, lmS, worldS, fwdArr, turnArr, segments, metricsCache, viewInfo, vecArr, indArr, tendArr });
+window.skiDebug = () => ({ frames, lmS, worldS, fwdArr, turnArr, segments, metricsCache, viewInfo, vecArr, indArr, tendArr, trackArr, camArr, follow, p3Arr });
 </script>
 </body>
 </html>

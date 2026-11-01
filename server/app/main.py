@@ -72,11 +72,22 @@ class CorrectionsPatch(BaseModel):
     corrections: list[CorrectionIn]
 
 
+class FollowSettings(BaseModel):
+    mode: str = Field("normal", pattern="^(normal|follow|zoom|skis)$", description="normal: 全体, follow: 追尾, zoom: 追尾+自動ズーム, skis: 板追尾")
+    framing: str = Field("full", pattern="^(full|body|upper|skis)$")
+    target_frac: float = Field(0.75, ge=0.4, le=0.95)
+    zoom_mult: float = Field(1.0, ge=0.5, le=2.0)
+    smooth: float = Field(0.5, ge=0.0, le=1.0)
+    center_y: float = Field(0.0, ge=-0.3, le=0.3)
+    max_zoom: float = Field(4.0, ge=1.0, le=6.0)
+
+
 class ExportCreate(BaseModel):
     speed: float = Field(1.0, ge=0.05, le=1.0)
     from_i: int = 0
     to_i: Optional[int] = None
     overlay: dict[str, bool] = Field(default_factory=lambda: {"skel": True, "lines": True, "cog": True, "ski": True, "text": True, "unsure": True})
+    follow: FollowSettings = Field(default_factory=FollowSettings)
 
 
 # ---------- uploads ----------

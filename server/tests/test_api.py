@@ -71,7 +71,7 @@ def test_job_lifecycle_on_video_without_person(client, tmp_path):
     jid = r.json()["id"]
     j = wait_done(client, jid)
     assert j["status"] == "done", j.get("error")
-    assert [s["stage"] for s in j["stages"]] == ["decode", "perframe", "temporal", "camera", "turns", "metrics", "vectors", "pose3d", "confidence", "results"]
+    assert [s["stage"] for s in j["stages"]] == ["decode", "perframe", "temporal", "camera", "turns", "metrics", "vectors", "pose3d", "track", "confidence", "results"]
     assert "pose" in j["model_versions"]
     res = client.get(f"/api/analysis/jobs/{jid}/results").json()
     assert res["schema"] == "ski-analysis/2" and res["quality"]["detect_rate"] == 0 and res["frame_count"] >= 8
@@ -112,7 +112,8 @@ def test_job_on_real_person_video(client):
     assert f["p3"] and len(f["p3"]["joints"]) == 33 and 0 <= f["p3"]["conf"] <= 1 and f["p3"]["ski"]["L"]["src"] in ("foot+pelvis", "edge2d+foot")
     assert res["pose3d"]["summary"]["frames"] > 0
     assert res["view"] in ("side", "front", "back", "oblique")
-    r = client.post(f"/api/analysis/jobs/{jid}/exports", json={"speed": 0.5, "to_i": 10})
+    assert f["track"] and f["cam"] and f["cam"]["zoom"] >= 1.0 and res["follow"]["summary"]["tracked"] > 0
+    r = client.post(f"/api/analysis/jobs/{jid}/exports", json={"speed": 0.5, "to_i": 10, "follow": {"mode": "zoom", "framing": "full"}})
     eid = r.json()["id"]
     for _ in range(240):
         e = client.get(f"/api/analysis/jobs/{jid}/exports/{eid}").json()

@@ -14,6 +14,7 @@ from .db import Database
 from .pipeline.base import PIPELINE_VERSION, Canceled, Context
 from .pipeline.run import run_job
 from .pipeline.render import render_video
+from .pipeline.track import plan_camera
 from .storage import Storage
 
 
@@ -130,9 +131,14 @@ class JobManager:
                 sel = [k for k, f in enumerate(frames) if a <= f["i"] <= b]
                 sub = lambda arr: [arr[k] for k in sel]
                 out_path = Path(self.s.data_dir) / "tmp" / f"{eid}.mp4"; out_path.parent.mkdir(parents=True, exist_ok=True)
+                follow = p.get("follow") or {}
+                cam = None
+                if follow.get("mode", "normal") != "normal":
+                    tracks = [f.get("track") for f in res["frames"]]
+                    cam = sub(plan_camera(tracks, 1.0 / res["sample_fps"], res["video"]["width"], res["video"]["height"], follow))
                 info = render_video(str(self.storage.local_path(job["video_key"])), str(out_path), sub(frames), sub(metrics), res["view"],
                                     sub([f["turn"] for f in res["frames"]]), sub([f["phase"] for f in res["frames"]]), res["sample_fps"],
-                                    float(res["params"].get("start_s") or 0), res["params"].get("end_s"), speed=float(p.get("speed", 1.0)), opts=p.get("overlay", {}))
+                                    float(res["params"].get("start_s") or 0), res["params"].get("end_s"), speed=float(p.get("speed", 1.0)), opts=p.get("overlay", {}), camera=cam)
                 key = f"jobs/{jid}/exports/{eid}.mp4"
                 self.storage.put_file(key, out_path, "video/mp4"); out_path.unlink(missing_ok=True)
                 self.db.update_export(eid, status="done", key=key)
